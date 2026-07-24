@@ -1,0 +1,21 @@
+strategy: auxiliary_loss
+description: Training-only superpixel-structure loss on the default P3 feature feeding Detect.
+model:
+  base: yolo12n.pt
+  data: datasets/coco/data.yaml
+  imgsz: 640
+  batch: 16
+auxiliary_loss:
+  algorithm_names:
+    - torch_slic
+  algorithm_kwargs:
+    n_segments: 300
+    compactness: 1.0
+    num_iters: 7
+  target_layer: null
+  loss_weight: 0.05
+  target_mode: auto
+  target_resize: nearest
+  loss_type: balanced_bce
+  head_init: tiny
+  scale_by_batch: true

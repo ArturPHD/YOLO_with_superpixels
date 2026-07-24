@@ -1,0 +1,23 @@
+# Example experiment config. The current CLI accepts equivalent command-line
+# arguments; this file is here as a stable place to collect experiment settings.
+
+strategy: input_channels
+model: yolo11n.pt
+data: data.yaml
+train:
+  epochs: 50
+  imgsz: 640
+  batch: 8
+  workers: 4
+  project: runs/superpixel
+  name: input_channels_slic
+superpixels:
+  algorithm: slic
+  algorithm_kwargs:
+    n_segments: 300
+    compactness: 10.0
+    sigma: 1.0
+input_channels:
+  init_extra: tiny
+  channel_order: [right, down]
+  edge_representation: zero_centered

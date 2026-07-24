@@ -1,0 +1,33 @@
+# Example defaults for SPiT token injection into the YOLO neck.
+#
+# The code auto-selects the P3 Detect input (`Detect.f[0]`) unless target_layer
+# is provided. For YOLO12 this is usually layer 14; for YOLO26, layer 16.
+
+fusion: add  # add | concat | cross_attention
+target_layer:
+enabled: true
+gate_init: tiny
+attention_heads: 4
+attention_dropout: 0.0
+token_provider: spit_labels  # region | spit_labels | spit
+
+spit:
+  tokenizer: superpixel
+  emb_dim: 64
+  num_bins: 5
+  heads: 4
+  depth: 1
+  keep_k: 0
+  image_size: 160
+  freeze_spit: false
+  drop_delta: false
+  bbox_reg: true
+  label_lambda_grad: 27.8
+  label_lambda_col: 10.0
+  label_maxlvl: 4
+
+region:
+  algorithm: torch_slic
+  n_segments: 300
+  compactness: 1.0
+  num_iters: 7

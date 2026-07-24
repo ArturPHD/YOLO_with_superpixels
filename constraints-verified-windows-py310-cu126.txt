@@ -1,0 +1,13 @@
+# Verified local development stack on Windows / Python 3.10 / CUDA 12.6 wheels.
+# Torch is installed from the selected PyTorch wheel index by setup scripts.
+torch==2.13.0+cu126
+torchvision==0.28.0+cu126
+ultralytics==8.4.92
+numpy==2.2.6
+scikit-image==0.25.2
+opencv-contrib-python==5.0.0.93
+cupy-cuda12x==14.1.1
+numba==0.66.0
+scipy==1.15.3
+pytest==9.1.1
+ruff==0.15.21

@@ -1,0 +1,19 @@
+# Practical first-run defaults for GPU-native neck injection.
+
+fusion: add  # add | concat | cross_attention
+target_layer:
+enabled: true
+gate_init: tiny
+attention_heads: 4
+attention_dropout: 0.0
+token_provider: region
+
+region:
+  algorithm: torch_slic
+  n_segments: 300
+  compactness: 1.0
+  num_iters: 7
+
+spit:
+  image_size: 160
+  emb_dim: 64

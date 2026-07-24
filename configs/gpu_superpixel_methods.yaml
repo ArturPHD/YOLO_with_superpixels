@@ -1,0 +1,121 @@
+# Methods suitable for GPU-first input-channel experiments.
+#
+# "strict_gpu: true" means the implementation is our PyTorch tensor path and the
+# image tensor does not need a CPU round-trip. "gpu_tensor_path: true" means the
+# runtime check returned CUDA edge channels from a CUDA input tensor; external
+# code may still allocate small helper tensors internally.
+
+strict_gpu_methods:
+  - name: color_affinity
+    aliases: [gpu_affinity]
+    channels: 2
+    output: right_down_affinity
+    content_signal: rgb_neighbor_similarity
+    recommended: true
+    default_kwargs:
+      temperature: 0.1
+      reduction: l2
+
+  - name: gradient_affinity
+    aliases: [texture_affinity]
+    channels: 2
+    output: right_down_affinity
+    content_signal: sobel_gradient_neighbor_similarity
+    recommended: true
+    default_kwargs:
+      temperature: 0.1
+      reduction: l2
+      color_weight: 0.0
+      gradient_weight: 1.0
+
+  - name: color_gradient_affinity
+    aliases: []
+    channels: 2
+    output: right_down_affinity
+    content_signal: rgb_plus_sobel_gradient_similarity
+    recommended: true
+    default_kwargs:
+      temperature: 0.1
+      reduction: l2
+      color_weight: 1.0
+      gradient_weight: 1.0
+
+  - name: torch_slic
+    aliases: [gpu_slic]
+    channels: 2
+    output: right_down_adjacency_from_labels
+    content_signal: slic_like_rgb_spatial_clustering
+    recommended: true
+    default_kwargs:
+      n_segments: 300
+      compactness: 1.0
+      num_iters: 7
+
+  - name: torch_grid
+    aliases: [gpu_grid]
+    channels: 2
+    output: right_down_adjacency_from_labels
+    content_signal: none_regular_grid_control
+    recommended: false
+    role: control_baseline_only
+    caveat: Regular grid does not follow image boundaries and should not be treated as a useful superpixel method.
+    default_kwargs:
+      n_segments: 300
+
+  - name: torch_voronoi
+    aliases: [gpu_voronoi]
+    channels: 2
+    output: right_down_adjacency_from_labels
+    content_signal: none_spatial_voronoi_control
+    recommended: false
+    role: control_baseline_only
+    caveat: Spatial Voronoi partitions do not follow image boundaries; use only as a negative/control baseline.
+    default_kwargs:
+      n_segments: 300
+      jitter: 0.35
+      seed: 0
+      chunk_size: 65536
+
+gpu_tensor_path_with_caveats:
+  - name: spit_dense_adjacency
+    aliases: [spit_adjacency]
+    channels: 2
+    output: right_down_adjacency_from_spit_dense_labels
+    content_signal: SPiT_dense_superpixel_tokenizer_labels
+    recommended: experimental
+    caveat: Uses SPiT DenseSPEdgeEmbedder(return_seg=True), then converts labels to binary right/down adjacency.
+    default_kwargs:
+      device: auto
+
+  - name: spit
+    channels: 2
+    output: dense_edge_channels
+    content_signal: SPiT_hierarchical_superpixel_tokenizer
+    recommended: experimental
+    caveat: External SPiT/CuPy path. Runtime check passes on CUDA, but keep timeout/smoke tests in the loop.
+    default_kwargs:
+      device: auto
+
+  - name: spit_voronoi
+    aliases: [pseudo_voronoi]
+    channels: 2
+    output: right_down_adjacency_from_labels
+    content_signal: SPiT_RViT_PCA_tree_pseudo_voronoi
+    recommended: false
+    role: control_baseline_only
+    caveat: Image tensor stays on CUDA, but SPiT initializes Sobol centroids on CPU. This is a pseudo-Voronoi control, not content-aware superpixel segmentation.
+    default_kwargs:
+      num_cells: 256
+
+cpu_only_methods:
+  - slic
+  - opencv_slic
+  - opencv_slico
+  - opencv_mslic
+  - opencv_lsc
+  - opencv_seeds
+
+last_checked:
+  environment: Windows, torch 2.13.0+cu126, RTX 3070 Ti
+  report_256: reports/gpu_superpixel_method_report_256.json
+  report_640: reports/gpu_superpixel_method_report_640.json
