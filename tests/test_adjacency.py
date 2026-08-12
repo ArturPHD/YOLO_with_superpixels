@@ -5,12 +5,15 @@ torch = pytest.importorskip("torch")
 
 from yolo_superpixels import (
     AdjacencyChannelBuilder,
+    DistanceChannelBuilder,
     SPiTDenseAdjacencyAlgorithm,
     TorchColorAffinityAlgorithm,
     TorchGradientAffinityAlgorithm,
     TorchGridSuperpixelAlgorithm,
     TorchSLICSuperpixelAlgorithm,
     TorchVoronoiSuperpixelAlgorithm,
+    tensor_edges_to_soft_distance_channels,
+    tensor_labels_to_soft_distance_channels,
 )
 from yolo_superpixels.adjacency import algorithm_output_to_edges, labels_to_adjacency
 
@@ -108,6 +111,21 @@ class CpuLabelAlgorithm:
         )
 
 
+class TensorLabelAlgorithm:
+    def __init__(self) -> None:
+        self.seen_device = None
+
+    def __call__(self, image: np.ndarray) -> np.ndarray:
+        raise AssertionError("CPU numpy path should not be used when labels_for_batch exists.")
+
+    def labels_for_batch(self, batch_tensor):
+        self.seen_device = batch_tensor.device
+        batch, _, height, width = batch_tensor.shape
+        labels = torch.zeros((batch, height, width), dtype=torch.long, device=batch_tensor.device)
+        labels[:, :, width // 2 :] = 1
+        return labels
+
+
 def test_adjacency_builder_uses_tensor_batch_path():
     algorithm = TensorOnlyAlgorithm()
     builder = AdjacencyChannelBuilder(algorithm, edge_representation="same")
@@ -159,6 +177,108 @@ def test_cpu_label_algorithm_zero_centered_is_not_transformed_twice():
     torch.testing.assert_close(output[:, 3], expected_right)
     torch.testing.assert_close(output[:, 4], expected_down)
     assert set(output[:, 3:].unique().tolist()) <= {-1.0, 0.0, 1.0}
+
+
+def test_tensor_labels_to_soft_interior_map_peaks_in_region_center():
+    labels = torch.zeros(1, 5, 5, dtype=torch.long)
+
+    channels = tensor_labels_to_soft_distance_channels(
+        labels,
+        mode="soft_interior",
+        max_distance=4,
+        boundary_width=2.0,
+    )
+
+    assert channels.shape == (1, 1, 5, 5)
+    assert channels[0, 0, 2, 2] == 1.0
+    assert channels[0, 0, 1, 1] == 0.5
+    assert channels[0, 0, 0, 0] == 0.0
+
+
+def test_tensor_labels_to_soft_boundary_map_fades_from_boundary():
+    labels = torch.zeros(1, 5, 5, dtype=torch.long)
+
+    channels = tensor_labels_to_soft_distance_channels(
+        labels,
+        mode="soft_boundary",
+        max_distance=4,
+        boundary_width=2.0,
+    )
+
+    assert channels.shape == (1, 1, 5, 5)
+    assert channels[0, 0, 0, 0] == 1.0
+    assert channels[0, 0, 1, 1] == 0.5
+    assert channels[0, 0, 2, 2] == 0.0
+
+
+def test_distance_builder_supports_four_channel_soft_interior_gpu_path():
+    algorithm = TensorLabelAlgorithm()
+    builder = DistanceChannelBuilder(algorithm, mode="soft_interior", max_distance=8)
+    images = torch.rand(2, 3, 8, 8)
+
+    output = builder.append_to_batch(images)
+
+    assert output.shape == (2, 4, 8, 8)
+    assert algorithm.seen_device == images.device
+    torch.testing.assert_close(output[:, :3], images)
+    assert torch.isfinite(output[:, 3]).all()
+    assert float(output[:, 3].min()) >= 0.0
+    assert float(output[:, 3].max()) <= 1.0
+
+
+def test_distance_builder_supports_five_channel_boundary_interior_mode():
+    builder = DistanceChannelBuilder(TensorLabelAlgorithm(), mode="soft_boundary_interior")
+    images = torch.rand(2, 3, 8, 8)
+
+    output = builder.append_to_batch(images)
+
+    assert output.shape == (2, 5, 8, 8)
+    torch.testing.assert_close(output[:, :3], images)
+    assert torch.isfinite(output[:, 3:]).all()
+
+
+def test_edges_to_soft_distance_channels_support_affinity_without_labels():
+    edges = torch.ones(1, 2, 5, 5)
+    edges[:, 0, :, 2] = 0.0
+
+    channels = tensor_edges_to_soft_distance_channels(
+        edges,
+        mode="soft_boundary_interior",
+        max_distance=2,
+        boundary_width=2.0,
+        threshold=0.5,
+    )
+
+    assert channels.shape == (1, 2, 5, 5)
+    assert channels[0, 0, 2, 2] == 1.0
+    assert channels[0, 1, 2, 2] == 0.0
+    assert channels[0, 1, 2, 1] > 0.0
+
+
+def test_distance_builder_supports_color_affinity_edge_fallback():
+    builder = DistanceChannelBuilder(
+        TorchColorAffinityAlgorithm(temperature=0.1),
+        mode="soft_interior",
+        max_distance=2,
+    )
+    images = torch.zeros(1, 3, 5, 5)
+
+    output = builder.append_to_batch(images)
+
+    assert output.shape == (1, 4, 5, 5)
+    torch.testing.assert_close(output[:, :3], images)
+    assert output[0, 3, 2, 2] == 1.0
+    assert output[0, 3, 0, 0] == 0.0
+
+
+def test_distance_builder_can_disable_prebuilt_soft_channel():
+    builder = DistanceChannelBuilder(TensorLabelAlgorithm(), mode="soft_interior", enabled=False)
+    images = torch.rand(2, 4, 8, 8)
+
+    output = builder.append_to_batch(images)
+
+    torch.testing.assert_close(output[:, :3], images[:, :3])
+    torch.testing.assert_close(output[:, 3:], torch.zeros(2, 1, 8, 8))
 
 
 def test_adjacency_builder_default_representation_is_zero_centered():

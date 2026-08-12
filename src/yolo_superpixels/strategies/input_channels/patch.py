@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from ...superpixels.adjacency import AdjacencyChannelBuilder
 
 SUPERPIXEL_DISABLE_FUSE_ATTR = "_yolo_superpixels_disable_fuse"
 
@@ -45,12 +43,12 @@ def install_ultralytics_fuse_guard() -> bool:
 
 
 class SuperpixelConv2d(nn.Conv2d):
-    """A Conv2d that accepts RGB tensors and internally appends adjacency channels."""
+    """A Conv2d that accepts RGB tensors and internally appends superpixel channels."""
 
     def __init__(
         self,
         *args,
-        channel_builder: AdjacencyChannelBuilder,
+        channel_builder: Any,
         base_channels: int = 3,
         **kwargs,
     ) -> None:
@@ -62,7 +60,7 @@ class SuperpixelConv2d(nn.Conv2d):
     def from_conv2d(
         cls,
         conv: nn.Conv2d,
-        channel_builder: AdjacencyChannelBuilder,
+        channel_builder: Any,
         target_channels: int = 5,
         base_channels: int = 3,
         init_extra: str = "tiny",
@@ -85,9 +83,9 @@ class SuperpixelConv2d(nn.Conv2d):
             raise ValueError(
                 f"Cannot reduce first Conv2d from {conv.in_channels} to {target_channels} channels."
             )
-        if conv.in_channels < base_channels or (conv.in_channels - base_channels) % 2 != 0:
+        if conv.in_channels < base_channels:
             raise ValueError(
-                f"Expected first Conv2d to have {base_channels} + 2N input channels, "
+                f"Expected first Conv2d to have at least {base_channels} input channels, "
                 f"got {conv.in_channels}."
             )
 
@@ -191,7 +189,7 @@ def _first_conv2d_module(model: nn.Module, allowed_channels: Iterable[int] | Non
 
 def patch_first_conv2d(
     model: nn.Module,
-    channel_builder: AdjacencyChannelBuilder,
+    channel_builder: Any,
     target_channels: int = 5,
     base_channels: int = 3,
     init_extra: str = "tiny",
@@ -203,7 +201,7 @@ def patch_first_conv2d(
     The first convolution receives ``B x 5 x H x W`` internally.
     """
 
-    allowed_channels = set(range(base_channels, target_channels + 1, 2))
+    allowed_channels = set(range(base_channels, target_channels + 1))
     found = _first_conv2d_module(model, allowed_channels=allowed_channels)
     if found is None:
         raise ValueError(

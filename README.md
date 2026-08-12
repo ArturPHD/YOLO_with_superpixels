@@ -4,23 +4,24 @@ This repository is organized as a small experiment framework for trying differen
 ways of injecting superpixel information into YOLO. Three strategies are currently
 implemented:
 
-- `input_channels`: YOLO receives the usual RGB signal plus two superpixel
-  adjacency channels.
+- `input_channels`: YOLO receives the usual RGB signal plus extra superpixel
+  channels. The default is two right/down adjacency channels, but soft
+  distance-to-boundary maps are also supported.
 - `neck_injection`: YOLO keeps RGB input, but superpixel/token features are
   injected into the neck feature map that feeds the P3 detection branch.
 - `auxiliary_loss`: YOLO keeps RGB input for inference, but during training a
   tiny auxiliary head asks an intermediate YOLO feature map to reproduce
   superpixel right/down structure.
 
-For `input_channels`, the two extra channels are:
+For default `input_channels`, the two extra channels are:
 
 1. `right`: pixel `(y, x)` and `(y, x + 1)` belong to the same superpixel.
 2. `down`: pixel `(y, x)` and `(y + 1, x)` belong to the same superpixel.
 
 The important design choice is that the dataloader, validator, predictor, and
 Ultralytics warmup still see normal 3-channel images. The first `Conv2d` is
-replaced with `SuperpixelConv2d`; it accepts RGB tensors, builds the two extra
-channels inside `forward`, and passes a 5-channel tensor to the real convolution.
+replaced with `SuperpixelConv2d`; it accepts RGB tensors, builds the extra
+channels inside `forward`, and passes a 4-, 5-, or wider tensor to the real convolution.
 This avoids the train/validation channel mismatch that happened when the batch
 was changed in some pipeline stages but not in others.
 
@@ -30,9 +31,9 @@ was changed in some pipeline stages but not in others.
 src/yolo_superpixels/
   superpixels/
     algorithms.py          # SLIC, torch_slic, SPiT, OpenCV baselines, tensor affinity, custom algorithms
-    adjacency.py           # label map -> right/down adjacency channels
+    adjacency.py           # label map -> adjacency and soft distance channels
   strategies/
-    input_channels/        # RGB + right/down adjacency channels
+    input_channels/        # RGB + generated superpixel input channels
       patch.py             # SuperpixelConv2d and first-conv patching
     neck_injection/        # SPiT/region token injection into the YOLO neck
       tokens.py            # SPiTTokenProvider and lightweight region tokens
@@ -285,6 +286,73 @@ python examples/val_ultralytics.py \
   --data data.yaml \
   --algorithm torch_slic \
   --edge-representation zero_centered
+```
+
+### Soft Distance Input Channels
+
+The input-channel strategy also supports soft maps derived from superpixel
+boundaries. Label-producing algorithms such as `torch_slic`, `slic`,
+`opencv_slic`, `opencv_slico`, `torch_grid`, `torch_voronoi`, or
+`spit_dense_adjacency` use their integer label maps. Affinity algorithms such as
+`color_affinity`, `gradient_affinity`, and `color_gradient_affinity` do not
+produce labels, so the builder treats low right/down affinity values as boundary
+evidence instead. Use `--soft-affinity-threshold` to choose the cutoff.
+
+| `--channel-mode` | Channels | Meaning |
+| --- | ---: | --- |
+| `soft_interior` | `RGB + 1` | One distance-to-boundary map. Label methods are normalized per superpixel; affinity methods are normalized by `--soft-max-distance`. |
+| `soft_boundary` | `RGB + 1` | One soft boundary-band map. Boundaries are `1`, and the value fades with distance. |
+| `soft_boundary_interior` | `RGB + 2` | Boundary map followed by interior map. |
+
+Examples for the three planned experiments:
+
+```bash
+python examples/train_ultralytics.py \
+  --model yolo12n.pt \
+  --data data.yaml \
+  --algorithm torch_slic \
+  --channel-mode soft_interior \
+  --init-extra tiny
+
+python examples/train_ultralytics.py \
+  --model yolo12n.pt \
+  --data data.yaml \
+  --algorithm torch_slic \
+  --channel-mode soft_boundary \
+  --init-extra tiny
+
+python examples/train_ultralytics.py \
+  --model yolo12n.pt \
+  --data data.yaml \
+  --algorithm torch_slic \
+  --channel-mode soft_boundary_interior \
+  --init-extra tiny
+```
+
+Visualize these channels for one image:
+
+```bash
+python scripts/visualize_soft_distance_channels.py \
+  --image path/to/image.jpg \
+  --algorithm torch_slic color_affinity \
+  --channel-mode soft_interior soft_boundary soft_boundary_interior \
+  --device 0
+```
+
+For cluster/manual benchmarks, pass the same mode through
+`scripts/run_coco_manual_benchmark.py`:
+
+```bash
+python scripts/run_coco_manual_benchmark.py \
+  --data /path/to/coco/data.yaml \
+  --stage rgb input \
+  --models yolo12n.pt yolo26n.pt \
+  --input-algorithm torch_slic \
+  --input-control-algorithm none \
+  --input-channel-mode soft_interior \
+  --epochs 70 \
+  --batch 64 \
+  --device 0
 ```
 
 ## Neck injection quick start
@@ -671,10 +739,13 @@ python examples/train_ultralytics.py \
   --extra-algorithm gradient_affinity
 ```
 
-The first convolution is expanded to `3 + 2 * number_of_algorithms` channels.
-A checkpoint trained with one algorithm is still a five-channel checkpoint, so
-swap-validation should use one replacement algorithm at a time. To combine two
-methods, fine-tune/train a seven-channel model.
+For `--channel-mode adjacency`, the first convolution is expanded to
+`3 + 2 * number_of_algorithms` channels. For `soft_interior` or
+`soft_boundary`, it is expanded to `3 + number_of_algorithms`. For
+`soft_boundary_interior`, it is expanded to `3 + 2 * number_of_algorithms`.
+A checkpoint trained with one channel layout must be validated with the same
+layout. To combine two methods, fine-tune/train a wider model with both methods
+listed in `--algorithm`.
 
 Custom label-map algorithm:
 
@@ -693,13 +764,18 @@ model = SuperpixelYOLO(
 )
 ```
 
-The algorithm may also return prebuilt edge channels with shape `2xHxW` or
-`HxWx2`, or a five-channel output where channels 3 and 4 are the extra channels.
+For adjacency mode, the algorithm may also return prebuilt edge channels with
+shape `2xHxW` or `HxWx2`, or a five-channel output where channels 3 and 4 are
+the extra channels. For soft distance modes, labels are preferred, but raw
+right/down edge or affinity channels are accepted as a fallback boundary source.
 For high-throughput GPU training, custom algorithms can additionally implement
 `edges_for_batch(batch_tensor, channel_order=("right", "down"))` and return a
 torch tensor with shape `Bx2xHxW`. Custom edge tensors should use the raw
 same-neighbor convention in `[0, 1]`; `AdjacencyChannelBuilder` applies
-`--edge-representation` afterward.
+`--edge-representation` afterward, while `DistanceChannelBuilder` thresholds
+them with `--soft-affinity-threshold`. For GPU-native label-based soft distance
+modes, implement `labels_for_batch(batch_tensor)` and return integer labels with
+shape `BxHxW`.
 
 ## Dependencies and External Repos
 

@@ -27,6 +27,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 STRATEGIES = ("input", "neck", "auxiliary")
+INPUT_CHANNEL_MODES = ("adjacency", "soft_interior", "soft_boundary", "soft_boundary_interior")
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,7 +42,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scratch-dir", type=Path, default=ROOT / "runs" / "e2e_smoke")
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--require-cuda", action="store_true")
+    parser.add_argument("--input-channel-mode", choices=INPUT_CHANNEL_MODES, default="adjacency")
     parser.add_argument("--edge-representation", default="zero_centered")
+    parser.add_argument("--soft-max-distance", type=int, default=16)
+    parser.add_argument("--soft-boundary-width", type=float, default=4.0)
+    parser.add_argument("--soft-affinity-threshold", type=float, default=0.5)
     parser.add_argument("--worker", choices=["train", "val", "predict"], default=None)
     parser.add_argument("--data", default=None)
     parser.add_argument("--checkpoint", default=None)
@@ -130,7 +135,15 @@ def auxiliary_config():
     )
 
 
-def build_model(strategy: str, model_path: str, edge_representation: str):
+def build_model(
+    strategy: str,
+    model_path: str,
+    edge_representation: str,
+    input_channel_mode: str = "adjacency",
+    soft_max_distance: int = 16,
+    soft_boundary_width: float = 4.0,
+    soft_affinity_threshold: float = 0.5,
+):
     if strategy == "input":
         from yolo_superpixels import SuperpixelYOLO
 
@@ -138,8 +151,12 @@ def build_model(strategy: str, model_path: str, edge_representation: str):
             model_path,
             algorithm=["torch_slic"],
             algorithm_kwargs=[input_algorithm_kwargs()],
+            channel_mode=input_channel_mode,
             init_extra="tiny",
             edge_representation=edge_representation,
+            soft_max_distance=soft_max_distance,
+            soft_boundary_width=soft_boundary_width,
+            soft_affinity_threshold=soft_affinity_threshold,
         )
     if strategy == "neck":
         from yolo_superpixels import SuperpixelNeckYOLO
@@ -156,7 +173,15 @@ def worker_train(args: argparse.Namespace) -> None:
     if args.data is None or args.run_root is None:
         raise ValueError("--data and --run-root are required for train worker")
     ensure_cuda_if_requested(args.device, args.require_cuda)
-    model = build_model(args.strategy[0], args.model, args.edge_representation)
+    model = build_model(
+        args.strategy[0],
+        args.model,
+        args.edge_representation,
+        args.input_channel_mode,
+        args.soft_max_distance,
+        args.soft_boundary_width,
+        args.soft_affinity_threshold,
+    )
     model.train(
         data=args.data,
         epochs=args.epochs,
@@ -177,7 +202,15 @@ def worker_val(args: argparse.Namespace) -> None:
     if args.data is None or args.checkpoint is None or args.run_root is None:
         raise ValueError("--data, --checkpoint, and --run-root are required for val worker")
     ensure_cuda_if_requested(args.device, args.require_cuda)
-    model = build_model(args.strategy[0], args.checkpoint, args.edge_representation)
+    model = build_model(
+        args.strategy[0],
+        args.checkpoint,
+        args.edge_representation,
+        args.input_channel_mode,
+        args.soft_max_distance,
+        args.soft_boundary_width,
+        args.soft_affinity_threshold,
+    )
     val_kwargs = {
         "data": args.data,
         "imgsz": args.imgsz,
@@ -201,7 +234,15 @@ def worker_predict(args: argparse.Namespace) -> None:
     if args.checkpoint is None or args.source is None or args.run_root is None:
         raise ValueError("--checkpoint, --source, and --run-root are required for predict worker")
     ensure_cuda_if_requested(args.device, args.require_cuda)
-    model = build_model(args.strategy[0], args.checkpoint, args.edge_representation)
+    model = build_model(
+        args.strategy[0],
+        args.checkpoint,
+        args.edge_representation,
+        args.input_channel_mode,
+        args.soft_max_distance,
+        args.soft_boundary_width,
+        args.soft_affinity_threshold,
+    )
     predict_kwargs = {
         "source": args.source,
         "imgsz": args.imgsz,
@@ -239,6 +280,14 @@ def run_child(args: argparse.Namespace, strategy: str, phase: str, extra: list[s
         str(args.epochs),
         "--edge-representation",
         args.edge_representation,
+        "--input-channel-mode",
+        args.input_channel_mode,
+        "--soft-max-distance",
+        str(args.soft_max_distance),
+        "--soft-boundary-width",
+        str(args.soft_boundary_width),
+        "--soft-affinity-threshold",
+        str(args.soft_affinity_threshold),
         *extra,
     ]
     if args.require_cuda:

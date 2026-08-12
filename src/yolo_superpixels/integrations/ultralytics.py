@@ -12,7 +12,12 @@ from ..strategies.input_channels.patch import (
     infer_first_conv_in_channels,
     patch_first_conv2d,
 )
-from ..superpixels.adjacency import AdjacencyChannelBuilder
+from ..superpixels.adjacency import (
+    DISTANCE_CHANNEL_MODES,
+    AdjacencyChannelBuilder,
+    DistanceChannelBuilder,
+    distance_mode_extra_channels,
+)
 from ..superpixels.algorithms import (
     OpenCVSuperpixelAlgorithm,
     SLICSuperpixelAlgorithm,
@@ -54,6 +59,7 @@ SUPPORTED_ALGORITHMS = (
     "opencv_lsc",
     "opencv_seeds",
 )
+CHANNEL_MODES = ("adjacency", *DISTANCE_CHANNEL_MODES)
 
 
 def _env_key(name: str) -> str:
@@ -123,9 +129,13 @@ def adapter_from_environment() -> "SuperpixelYOLOAdapter":
     return SuperpixelYOLOAdapter(
         algorithm_names=algorithm_names,
         algorithm_kwargs=algorithm_kwargs,
+        channel_mode=os.environ.get(_env_key("CHANNEL_MODE"), "adjacency"),
         channel_order=channel_order,  # type: ignore[arg-type]
         edge_representation=os.environ.get(_env_key("EDGE_REPRESENTATION"), "zero_centered"),
         edge_value_scale=float(os.environ.get(_env_key("EDGE_VALUE_SCALE"), "1.0")),
+        soft_max_distance=int(os.environ.get(_env_key("SOFT_MAX_DISTANCE"), "32")),
+        soft_boundary_width=float(os.environ.get(_env_key("SOFT_BOUNDARY_WIDTH"), "6.0")),
+        soft_affinity_threshold=float(os.environ.get(_env_key("SOFT_AFFINITY_THRESHOLD"), "0.5")),
         fail_open=_parse_bool(os.environ.get(_env_key("FAIL_OPEN")), False),
         extra_channels_enabled=_parse_bool(os.environ.get(_env_key("EXTRA_CHANNELS_ENABLED")), True),
         disabled_value=float(os.environ.get(_env_key("DISABLED_VALUE"), "0.0")),
@@ -143,9 +153,13 @@ class SuperpixelYOLOAdapter:
     algorithm_name: str | None = None
     algorithm_names: list[str] | None = None
     algorithm_kwargs: dict[str, Any] | list[dict[str, Any]] = field(default_factory=dict)
+    channel_mode: str = "adjacency"
     channel_order: tuple[str, str] = ("right", "down")
     edge_representation: str = "zero_centered"
     edge_value_scale: float = 1.0
+    soft_max_distance: int = 32
+    soft_boundary_width: float = 6.0
+    soft_affinity_threshold: float = 0.5
     fail_open: bool = False
     extra_channels_enabled: bool = True
     disabled_value: float = 0.0
@@ -156,6 +170,9 @@ class SuperpixelYOLOAdapter:
     _algorithm_kwargs_list: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.channel_mode not in CHANNEL_MODES:
+            allowed = ", ".join(CHANNEL_MODES)
+            raise ValueError(f"channel_mode must be one of: {allowed}.")
         algorithms, names = self._normalize_algorithms()
         if algorithms and names:
             raise ValueError(
@@ -179,7 +196,10 @@ class SuperpixelYOLOAdapter:
         else:
             self.algorithm = self._algorithms
         if self.target_channels is None:
-            self.target_channels = self.base_channels + 2 * len(self._algorithms)
+            per_algorithm = 2
+            if self.channel_mode != "adjacency":
+                per_algorithm = distance_mode_extra_channels(self.channel_mode)  # type: ignore[arg-type]
+            self.target_channels = self.base_channels + per_algorithm * len(self._algorithms)
 
     @property
     def algorithms(self) -> tuple[SuperpixelAlgorithm, ...]:
@@ -189,9 +209,13 @@ class SuperpixelYOLOAdapter:
         return {
             "algorithm_names": self.algorithm_names or [],
             "algorithm_kwargs": self._algorithm_kwargs_list,
+            "channel_mode": self.channel_mode,
             "channel_order": list(self.channel_order),
             "edge_representation": self.edge_representation,
             "edge_value_scale": self.edge_value_scale,
+            "soft_max_distance": self.soft_max_distance,
+            "soft_boundary_width": self.soft_boundary_width,
+            "soft_affinity_threshold": self.soft_affinity_threshold,
             "fail_open": self.fail_open,
             "extra_channels_enabled": self.extra_channels_enabled,
             "disabled_value": self.disabled_value,
@@ -243,6 +267,17 @@ class SuperpixelYOLOAdapter:
         return [{} for _ in range(count)]
 
     def channel_builder(self) -> AdjacencyChannelBuilder:
+        if self.channel_mode != "adjacency":
+            return DistanceChannelBuilder(
+                algorithm=self.algorithms,
+                mode=self.channel_mode,  # type: ignore[arg-type]
+                max_distance=self.soft_max_distance,
+                boundary_width=self.soft_boundary_width,
+                affinity_threshold=self.soft_affinity_threshold,
+                fail_open=self.fail_open,
+                enabled=self.extra_channels_enabled,
+                disabled_value=self.disabled_value,
+            )
         return AdjacencyChannelBuilder(
             algorithm=self.algorithms,
             channel_order=self.channel_order,  # type: ignore[arg-type]
@@ -263,9 +298,13 @@ class SuperpixelYOLOAdapter:
         os.environ[_env_key("ALGORITHM_KWARGS")] = json.dumps(
             self._algorithm_kwargs_list[0] if len(self._algorithm_kwargs_list) == 1 else {}
         )
+        os.environ[_env_key("CHANNEL_MODE")] = self.channel_mode
         os.environ[_env_key("CHANNEL_ORDER")] = json.dumps(list(self.channel_order))
         os.environ[_env_key("EDGE_REPRESENTATION")] = self.edge_representation
         os.environ[_env_key("EDGE_VALUE_SCALE")] = str(self.edge_value_scale)
+        os.environ[_env_key("SOFT_MAX_DISTANCE")] = str(self.soft_max_distance)
+        os.environ[_env_key("SOFT_BOUNDARY_WIDTH")] = str(self.soft_boundary_width)
+        os.environ[_env_key("SOFT_AFFINITY_THRESHOLD")] = str(self.soft_affinity_threshold)
         os.environ[_env_key("FAIL_OPEN")] = "1" if self.fail_open else "0"
         os.environ[_env_key("EXTRA_CHANNELS_ENABLED")] = "1" if self.extra_channels_enabled else "0"
         os.environ[_env_key("DISABLED_VALUE")] = str(self.disabled_value)

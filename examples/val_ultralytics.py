@@ -36,6 +36,7 @@ ALGORITHM_CHOICES = [
     "opencv_seeds",
 ]
 EDGE_REPRESENTATION_CHOICES = ["same", "boundary", "zero_centered", "boundary_zero_centered"]
+CHANNEL_MODE_CHOICES = ["adjacency", "soft_interior", "soft_boundary", "soft_boundary_interior"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,6 +50,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project", default="runs/superpixel_val")
     parser.add_argument("--name", default="val")
     parser.add_argument("--extra-channels", choices=["enabled", "disabled", "both"], default="enabled")
+    parser.add_argument(
+        "--channel-mode",
+        choices=CHANNEL_MODE_CHOICES,
+        default="adjacency",
+        help="Must match the extra-channel mode used to fine-tune the checkpoint.",
+    )
     parser.add_argument(
         "--edge-representation",
         choices=EDGE_REPRESENTATION_CHOICES,
@@ -75,6 +82,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sigma", type=float, default=1.0)
     parser.add_argument("--torch-slic-compactness", type=float, default=1.0)
     parser.add_argument("--torch-slic-iters", type=int, default=7)
+    parser.add_argument("--soft-max-distance", type=int, default=32)
+    parser.add_argument("--soft-boundary-width", type=float, default=6.0)
+    parser.add_argument("--soft-affinity-threshold", type=float, default=0.5)
     parser.add_argument("--spit-module", default="spit.tokenizer.densesp")
     parser.add_argument("--spit-class", default="DenseSPEdgeEmbedder")
     parser.add_argument("--spit-device", default="auto")
@@ -175,8 +185,12 @@ def run_val(args: argparse.Namespace, enabled: bool):
         args.model,
         algorithm=selected_algorithms(args),
         algorithm_kwargs=algorithm_kwargs_from_args(args),
+        channel_mode=args.channel_mode,
         extra_channels_enabled=enabled,
         edge_representation=args.edge_representation,
+        soft_max_distance=args.soft_max_distance,
+        soft_boundary_width=args.soft_boundary_width,
+        soft_affinity_threshold=args.soft_affinity_threshold,
     )
     val_kwargs = {
         "data": args.data,

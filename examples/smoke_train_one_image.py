@@ -44,6 +44,7 @@ ALGORITHM_CHOICES = [
     "opencv_seeds",
 ]
 EDGE_REPRESENTATION_CHOICES = ["same", "boundary", "zero_centered", "boundary_zero_centered"]
+CHANNEL_MODE_CHOICES = ["adjacency", "soft_interior", "soft_boundary", "soft_boundary_interior"]
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -51,7 +52,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="yolo12n.pt")
     parser.add_argument("--algorithm", choices=ALGORITHM_CHOICES, default="slic")
+    parser.add_argument("--channel-mode", choices=CHANNEL_MODE_CHOICES, default="adjacency")
     parser.add_argument("--edge-representation", choices=EDGE_REPRESENTATION_CHOICES, default="zero_centered")
+    parser.add_argument("--soft-max-distance", type=int, default=16)
+    parser.add_argument("--soft-boundary-width", type=float, default=4.0)
+    parser.add_argument("--soft-affinity-threshold", type=float, default=0.5)
     parser.add_argument("--imgsz", type=int, default=96)
     parser.add_argument("--device", default="cpu")
     parser.add_argument(
@@ -124,8 +129,12 @@ def main() -> None:
         args.model,
         algorithm=args.algorithm,
         algorithm_kwargs=algorithm_kwargs,
+        channel_mode=args.channel_mode,
         init_extra="tiny",
         edge_representation=args.edge_representation,
+        soft_max_distance=args.soft_max_distance,
+        soft_boundary_width=args.soft_boundary_width,
+        soft_affinity_threshold=args.soft_affinity_threshold,
     )
     model.train(
         data=str(data_yaml),
@@ -135,7 +144,7 @@ def main() -> None:
         workers=0,
         device=args.device,
         project=str(runs_dir),
-        name=f"input_channels_{Path(args.model).stem}_{args.algorithm}_one_image",
+        name=f"input_channels_{Path(args.model).stem}_{args.algorithm}_{args.channel_mode}_one_image",
         exist_ok=True,
         plots=False,
         val=True,

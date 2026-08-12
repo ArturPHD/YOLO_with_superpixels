@@ -33,6 +33,7 @@ def make_args(tmp_path):
         rerun=False,
         exist_ok=True,
         input_algorithm="torch_slic",
+        input_channel_mode="adjacency",
         input_control_algorithm=["color_affinity", "torch_grid", "torch_voronoi"],
         no_rgb_baseline=False,
         init_extra="tiny",
@@ -51,6 +52,9 @@ def make_args(tmp_path):
         n_segments=300,
         torch_slic_compactness=1.0,
         torch_slic_iters=7,
+        soft_max_distance=32,
+        soft_boundary_width=6.0,
+        soft_affinity_threshold=0.5,
         lr0=None,
         lrf=None,
         optimizer=None,
@@ -77,10 +81,10 @@ def test_manual_coco_benchmark_builds_expected_transfer_learning_jobs(tmp_path):
     assert [job.stage for job in jobs].count("auxiliary") == 2
     assert {job.model for job in jobs} == {"yolo12n.pt", "yolo26n.pt"}
     assert {job.variant for job in jobs if job.stage == "input"} == {
-        "torch_slic",
-        "color_affinity",
-        "torch_grid",
-        "torch_voronoi",
+        "torch_slic_adjacency",
+        "color_affinity_adjacency",
+        "torch_grid_adjacency",
+        "torch_voronoi_adjacency",
     }
     assert {job.variant for job in jobs if job.stage == "neck"} == {
         "add_region_torch_slic",
@@ -94,6 +98,7 @@ def test_manual_coco_benchmark_builds_expected_transfer_learning_jobs(tmp_path):
         assert job.command[job.command.index("--epochs") + 1] == "70"
     input_jobs = [job for job in jobs if job.stage == "input"]
     assert all(job.command[job.command.index("--edge-representation") + 1] == "zero_centered" for job in input_jobs)
+    assert all(job.command[job.command.index("--channel-mode") + 1] == "adjacency" for job in input_jobs)
 
 
 def test_manual_coco_benchmark_swap_job_uses_trained_input_checkpoints(tmp_path):
@@ -107,8 +112,9 @@ def test_manual_coco_benchmark_swap_job_uses_trained_input_checkpoints(tmp_path)
     ]
     assert len(checkpoint_values) == 2
     assert all("input_" in value for value in checkpoint_values)
-    assert any("yolo12n_best" in value for value in checkpoint_values)
-    assert any("yolo26n_best" in value for value in checkpoint_values)
+    assert any("yolo12n_adjacency_best" in value for value in checkpoint_values)
+    assert any("yolo26n_adjacency_best" in value for value in checkpoint_values)
+    assert job.command[job.command.index("--channel-mode") + 1] == "adjacency"
     assert job.command[job.command.index("--edge-representation") + 1] == "zero_centered"
 
 

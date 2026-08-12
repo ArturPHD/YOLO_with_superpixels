@@ -34,6 +34,7 @@ DEFAULT_SWAP_ALGORITHMS = [
 ]
 DEFAULT_INPUT_CONTROL_ALGORITHMS = ["color_affinity", "torch_grid", "torch_voronoi"]
 EDGE_REPRESENTATION_CHOICES = ["same", "boundary", "zero_centered", "boundary_zero_centered"]
+INPUT_CHANNEL_MODE_CHOICES = ["adjacency", "soft_interior", "soft_boundary", "soft_boundary_interior"]
 COMPLETION_MARKER = "yolo_superpixels_job_complete.json"
 SOURCE_TREE_INCLUDE_DIRS = ("src", "examples", "scripts", "configs")
 SOURCE_TREE_INCLUDE_FILES = (
@@ -107,6 +108,15 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--input-algorithm", default="torch_slic")
     parser.add_argument(
+        "--input-channel-mode",
+        choices=INPUT_CHANNEL_MODE_CHOICES,
+        default="adjacency",
+        help=(
+            "Input-channel family for input-stage jobs. Use soft_interior, "
+            "soft_boundary, or soft_boundary_interior for distance-map experiments."
+        ),
+    )
+    parser.add_argument(
         "--input-control-algorithm",
         nargs="*",
         default=DEFAULT_INPUT_CONTROL_ALGORITHMS,
@@ -141,6 +151,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-segments", type=int, default=300)
     parser.add_argument("--torch-slic-compactness", type=float, default=1.0)
     parser.add_argument("--torch-slic-iters", type=int, default=7)
+    parser.add_argument("--soft-max-distance", type=int, default=32)
+    parser.add_argument("--soft-boundary-width", type=float, default=6.0)
+    parser.add_argument("--soft-affinity-threshold", type=float, default=0.5)
 
     parser.add_argument("--lr0", type=float, default=None)
     parser.add_argument("--lrf", type=float, default=None)
@@ -511,7 +524,8 @@ def build_training_jobs(args: argparse.Namespace) -> list[BenchmarkJob]:
         project = run_root / "input_channels"
         for algorithm in input_training_algorithms(args):
             for model in args.models:
-                name = f"input_{model_stem(model)}_{safe_name(algorithm)}"
+                mode_suffix = "" if args.input_channel_mode == "adjacency" else f"_{args.input_channel_mode}"
+                name = f"input_{model_stem(model)}_{safe_name(algorithm)}{mode_suffix}"
                 command = [
                     sys.executable,
                     str(ROOT / "examples" / "train_ultralytics.py"),
@@ -520,6 +534,8 @@ def build_training_jobs(args: argparse.Namespace) -> list[BenchmarkJob]:
                     *common_train_args(args, project, name),
                     "--algorithm",
                     algorithm,
+                    "--channel-mode",
+                    args.input_channel_mode,
                     "--init-extra",
                     args.init_extra,
                     "--edge-representation",
@@ -530,12 +546,18 @@ def build_training_jobs(args: argparse.Namespace) -> list[BenchmarkJob]:
                     str(args.torch_slic_compactness),
                     "--torch-slic-iters",
                     str(args.torch_slic_iters),
+                    "--soft-max-distance",
+                    str(args.soft_max_distance),
+                    "--soft-boundary-width",
+                    str(args.soft_boundary_width),
+                    "--soft-affinity-threshold",
+                    str(args.soft_affinity_threshold),
                 ]
                 jobs.append(
                     BenchmarkJob(
                         stage="input",
                         model=model,
-                        variant=algorithm,
+                        variant=f"{algorithm}_{args.input_channel_mode}",
                         command=command,
                         run_dir=project / name,
                         log_path=logs_dir / f"{name}.log",
@@ -626,10 +648,12 @@ def input_checkpoint_paths(args: argparse.Namespace) -> list[tuple[str, Path]]:
     project = Path(args.run_root) / "input_channels"
     checkpoints: list[tuple[str, Path]] = []
     for model in args.models:
-        name = f"input_{model_stem(model)}_{safe_name(args.input_algorithm)}"
+        mode_suffix = "" if args.input_channel_mode == "adjacency" else f"_{args.input_channel_mode}"
+        name = f"input_{model_stem(model)}_{safe_name(args.input_algorithm)}{mode_suffix}"
         for checkpoint_name in args.swap_checkpoints:
             checkpoint = project / name / "weights" / f"{checkpoint_name}.pt"
-            checkpoints.append((f"{model_stem(model)}_{checkpoint_name}", checkpoint))
+            label = f"{model_stem(model)}_{args.input_channel_mode}_{checkpoint_name}"
+            checkpoints.append((label, checkpoint))
     return checkpoints
 
 
@@ -659,6 +683,8 @@ def build_swap_job(args: argparse.Namespace) -> BenchmarkJob:
         str(output),
         "--algorithm",
         *algorithms,
+        "--channel-mode",
+        args.input_channel_mode,
         "--edge-representation",
         args.edge_representation,
         "--n-segments",
@@ -667,6 +693,12 @@ def build_swap_job(args: argparse.Namespace) -> BenchmarkJob:
         str(args.torch_slic_compactness),
         "--torch-slic-iters",
         str(args.torch_slic_iters),
+        "--soft-max-distance",
+        str(args.soft_max_distance),
+        "--soft-boundary-width",
+        str(args.soft_boundary_width),
+        "--soft-affinity-threshold",
+        str(args.soft_affinity_threshold),
     ]
     for label, checkpoint in input_checkpoint_paths(args):
         command.extend(["--checkpoint", f"{label}={checkpoint}"])

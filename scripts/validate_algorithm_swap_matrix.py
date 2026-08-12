@@ -20,6 +20,7 @@ DEFAULT_ALGORITHMS = [
     "spit_dense_adjacency",
 ]
 EDGE_REPRESENTATION_CHOICES = ["same", "boundary", "zero_centered", "boundary_zero_centered"]
+CHANNEL_MODE_CHOICES = ["adjacency", "soft_interior", "soft_boundary", "soft_boundary_interior"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,6 +41,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=Path("runs/superpixel_swap_matrix/swap_matrix.csv"))
     parser.add_argument("--include-spit", action="store_true", help="Also run raw SPiT dense edge channels.")
     parser.add_argument(
+        "--channel-mode",
+        choices=CHANNEL_MODE_CHOICES,
+        default="adjacency",
+        help="Extra-channel mode used by the trained input-channel checkpoint.",
+    )
+    parser.add_argument(
         "--edge-representation",
         choices=EDGE_REPRESENTATION_CHOICES,
         default="zero_centered",
@@ -54,6 +61,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--voronoi-jitter", type=float, default=0.35)
     parser.add_argument("--voronoi-seed", type=int, default=0)
     parser.add_argument("--spit-voronoi-cells", type=int, default=256)
+    parser.add_argument("--soft-max-distance", type=int, default=32)
+    parser.add_argument("--soft-boundary-width", type=float, default=6.0)
+    parser.add_argument("--soft-affinity-threshold", type=float, default=0.5)
     return parser.parse_args()
 
 
@@ -117,6 +127,7 @@ def write_outputs(rows: list[dict[str, Any]], output: Path) -> None:
     fieldnames = [
         "checkpoint",
         "algorithm",
+        "channel_mode",
         "precision",
         "recall",
         "map50",
@@ -132,20 +143,21 @@ def write_outputs(rows: list[dict[str, Any]], output: Path) -> None:
 
     markdown = output.with_suffix(".md")
     lines = [
-        "| Checkpoint | Algorithm | P | R | mAP50 | mAP50-95 | Time | Status |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Checkpoint | Algorithm | Channel mode | P | R | mAP50 | mAP50-95 | Time | Status |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for row in rows:
         if row["status"] == "ok":
             lines.append(
                 f"| {row['checkpoint']} | `{row['algorithm']}` | "
+                f"`{row['channel_mode']}` | "
                 f"{row['precision']:.4f} | {row['recall']:.4f} | "
                 f"{row['map50']:.4f} | {row['map50_95']:.4f} | "
                 f"{row['seconds']:.1f}s | ok |"
             )
         else:
             lines.append(
-                f"| {row['checkpoint']} | `{row['algorithm']}` |  |  |  |  | "
+                f"| {row['checkpoint']} | `{row['algorithm']}` | `{row['channel_mode']}` |  |  |  |  | "
                 f"{row['seconds']:.1f}s | {row['error']} |"
             )
     markdown.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -166,6 +178,7 @@ def main() -> None:
             row: dict[str, Any] = {
                 "checkpoint": checkpoint_label,
                 "algorithm": algorithm,
+                "channel_mode": args.channel_mode,
                 "precision": "",
                 "recall": "",
                 "map50": "",
@@ -179,8 +192,12 @@ def main() -> None:
                     checkpoint_path,
                     algorithm=[algorithm],
                     algorithm_kwargs=[kwargs_for_algorithm(algorithm, args)],
+                    channel_mode=args.channel_mode,
                     extra_channels_enabled=True,
                     edge_representation=args.edge_representation,
+                    soft_max_distance=args.soft_max_distance,
+                    soft_boundary_width=args.soft_boundary_width,
+                    soft_affinity_threshold=args.soft_affinity_threshold,
                 )
                 result = model.val(
                     data=args.data,

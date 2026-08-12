@@ -36,6 +36,7 @@ ALGORITHM_CHOICES = [
     "opencv_seeds",
 ]
 EDGE_REPRESENTATION_CHOICES = ["same", "boundary", "zero_centered", "boundary_zero_centered"]
+CHANNEL_MODE_CHOICES = ["adjacency", "soft_interior", "soft_boundary", "soft_boundary_interior"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,6 +78,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--init-extra", choices=["zero", "tiny", "mean", "kaiming"], default="tiny")
     parser.add_argument(
+        "--channel-mode",
+        choices=CHANNEL_MODE_CHOICES,
+        default="adjacency",
+        help=(
+            "Extra-channel family. adjacency gives RGB+right/down channels. "
+            "soft_interior gives RGB+one normalized distance-to-boundary channel. "
+            "soft_boundary gives RGB+one boundary-band channel. "
+            "soft_boundary_interior gives RGB+both soft channels."
+        ),
+    )
+    parser.add_argument(
         "--edge-representation",
         choices=EDGE_REPRESENTATION_CHOICES,
         default="zero_centered",
@@ -92,6 +104,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sigma", type=float, default=1.0, help="SLIC only.")
     parser.add_argument("--torch-slic-compactness", type=float, default=1.0, help="torch_slic/gpu_slic only.")
     parser.add_argument("--torch-slic-iters", type=int, default=7, help="torch_slic/gpu_slic only.")
+    parser.add_argument(
+        "--soft-max-distance",
+        type=int,
+        default=32,
+        help="soft_* modes: maximum erosion steps used for distance-to-boundary.",
+    )
+    parser.add_argument(
+        "--soft-boundary-width",
+        type=float,
+        default=6.0,
+        help="soft_boundary modes: pixels over which the boundary signal fades to zero.",
+    )
+    parser.add_argument(
+        "--soft-affinity-threshold",
+        type=float,
+        default=0.5,
+        help="soft_* modes with affinity algorithms: affinity <= threshold is treated as boundary.",
+    )
 
     parser.add_argument(
         "--spit-module",
@@ -207,8 +237,12 @@ def main() -> None:
         args.model,
         algorithm=algorithms,
         algorithm_kwargs=algorithm_kwargs,
+        channel_mode=args.channel_mode,
         init_extra=args.init_extra,
         edge_representation=args.edge_representation,
+        soft_max_distance=args.soft_max_distance,
+        soft_boundary_width=args.soft_boundary_width,
+        soft_affinity_threshold=args.soft_affinity_threshold,
     )
 
     train_kwargs = {

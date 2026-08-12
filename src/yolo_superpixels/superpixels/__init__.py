@@ -1,11 +1,21 @@
 """Reusable superpixel algorithms and channel builders."""
 
 from .adjacency import (
+    DISTANCE_CHANNEL_MODES,
     EDGE_REPRESENTATIONS,
     AdjacencyChannelBuilder,
+    DistanceChannelBuilder,
+    DistanceChannelMode,
     EdgeRepresentation,
     algorithm_output_to_edges,
+    algorithm_output_to_labels,
+    distance_mode_extra_channels,
     labels_to_adjacency,
+    tensor_labels_to_boundary_distance,
+    tensor_labels_to_boundary_mask,
+    tensor_labels_to_soft_distance_channels,
+    tensor_edges_to_boundary_mask,
+    tensor_edges_to_soft_distance_channels,
 )
 from .algorithms import (
     CallableSuperpixelAlgorithm,
@@ -24,7 +34,10 @@ from .algorithms import (
 
 __all__ = [
     "AdjacencyChannelBuilder",
+    "DISTANCE_CHANNEL_MODES",
     "EDGE_REPRESENTATIONS",
+    "DistanceChannelBuilder",
+    "DistanceChannelMode",
     "EdgeRepresentation",
     "CallableSuperpixelAlgorithm",
     "OpenCVSuperpixelAlgorithm",
@@ -39,5 +52,12 @@ __all__ = [
     "TorchSLICSuperpixelAlgorithm",
     "TorchVoronoiSuperpixelAlgorithm",
     "algorithm_output_to_edges",
+    "algorithm_output_to_labels",
+    "distance_mode_extra_channels",
     "labels_to_adjacency",
+    "tensor_labels_to_boundary_distance",
+    "tensor_labels_to_boundary_mask",
+    "tensor_labels_to_soft_distance_channels",
+    "tensor_edges_to_boundary_mask",
+    "tensor_edges_to_soft_distance_channels",
 ]

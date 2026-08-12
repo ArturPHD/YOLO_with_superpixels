@@ -3,9 +3,12 @@
 from importlib import import_module
 
 from .superpixels import (
+    DISTANCE_CHANNEL_MODES,
     EDGE_REPRESENTATIONS,
     AdjacencyChannelBuilder,
     CallableSuperpixelAlgorithm,
+    DistanceChannelBuilder,
+    DistanceChannelMode,
     EdgeRepresentation,
     OpenCVSuperpixelAlgorithm,
     SLICSuperpixelAlgorithm,
@@ -18,12 +21,18 @@ from .superpixels import (
     TorchGridSuperpixelAlgorithm,
     TorchSLICSuperpixelAlgorithm,
     TorchVoronoiSuperpixelAlgorithm,
+    distance_mode_extra_channels,
     labels_to_adjacency,
+    tensor_edges_to_soft_distance_channels,
+    tensor_labels_to_soft_distance_channels,
 )
 
 __all__ = [
     "AdjacencyChannelBuilder",
+    "DISTANCE_CHANNEL_MODES",
     "EDGE_REPRESENTATIONS",
+    "DistanceChannelBuilder",
+    "DistanceChannelMode",
     "EdgeRepresentation",
     "CallableSuperpixelAlgorithm",
     "OpenCVSuperpixelAlgorithm",
@@ -38,6 +47,7 @@ __all__ = [
     "TorchGridSuperpixelAlgorithm",
     "TorchSLICSuperpixelAlgorithm",
     "TorchVoronoiSuperpixelAlgorithm",
+    "distance_mode_extra_channels",
     "NeckInjectionConfig",
     "NeckInjectionDetectionTrainer",
     "NeckInjectionPatchResult",
@@ -56,6 +66,8 @@ __all__ = [
     "SuperpixelYOLOAdapter",
     "infer_first_conv_in_channels",
     "labels_to_adjacency",
+    "tensor_edges_to_soft_distance_channels",
+    "tensor_labels_to_soft_distance_channels",
     "patch_first_conv2d",
     "patch_auxiliary_loss",
     "patch_neck_injection",
