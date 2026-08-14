@@ -304,6 +304,18 @@ evidence instead. Use `--soft-affinity-threshold` to choose the cutoff.
 | `soft_boundary` | `RGB + 1` | One soft boundary-band map. Boundaries are `1`, and the value fades with distance. |
 | `soft_boundary_interior` | `RGB + 2` | Boundary map followed by interior map. |
 
+The following figure shows the new channels on a real COCO image. Red pixels in
+the overlay are detected boundary pixels for visualization only. The actual
+extra channels are grayscale tensors: black is `0`, white is `1`.
+
+![Soft superpixel input channels](docs/assets/soft_channels_clean_columns_000000000139.png)
+
+`color_affinity` is an affinity source, not a true label-based superpixel
+algorithm. It compares right/down neighboring pixels and treats affinity values
+below `--soft-affinity-threshold` as boundary evidence. This makes it closer to
+a fast local edge/contrast signal. `torch_slic` is label-based, so it produces
+SLIC-like regions; its interior channel is normalized inside each region.
+
 Examples for the three planned experiments:
 
 ```bash
@@ -354,6 +366,43 @@ python scripts/run_coco_manual_benchmark.py \
   --batch 64 \
   --device 0
 ```
+
+### Current Research Status
+
+Implemented and locally verified:
+
+- `adjacency`: RGB plus right/down superpixel adjacency or affinity channels.
+- `soft_interior`: RGB plus one distance-from-boundary channel.
+- `soft_boundary`: RGB plus one soft boundary-band channel.
+- `soft_boundary_interior`: RGB plus both soft boundary and soft interior
+  channels.
+- Channel disabling for ablations, so a trained wider model can be evaluated
+  with generated extra channels set to zero.
+- GPU-native paths for `color_affinity`, `gradient_affinity`,
+  `color_gradient_affinity`, `torch_slic`, `torch_grid`, and `torch_voronoi`.
+- Neck injection and auxiliary-loss strategies for later experiments.
+
+Local validation on 2026-08-12:
+
+- `ruff check .`: passed.
+- `pytest -q`: `62 passed, 1 skipped`.
+- One-image YOLO12n smoke training passed for `color_affinity` with
+  `soft_interior`, `soft_boundary`, and `soft_boundary_interior`.
+
+Cluster screening in progress on COCO:
+
+| Model | Method | Channel mode | Status | Last observed COCO `mAP50-95` | Notes |
+| --- | --- | --- | --- | ---: | --- |
+| YOLO12n | `color_affinity` | `soft_interior` | complete, 70 epochs | `0.39575` | Transfer learning from `yolo12n.pt`. |
+| YOLO12n | `color_affinity` | `soft_boundary` | complete, 70 epochs | `0.39574` | Essentially tied with `soft_interior`. |
+| YOLO12n | `color_affinity` | `soft_boundary_interior` | running at last check | `0.35143` at epoch 16 | Too early to judge. |
+| YOLO26n | `color_affinity` | all three soft modes | queued | - | Starts after the YOLO12n and pretrained-baseline jobs. |
+| YOLO12n/YOLO26n | RGB pretrained checkpoints | validation only | queued | - | Needed to compare against the downloaded models directly. |
+
+Preliminary interpretation: the two completed YOLO12n soft-channel runs do not
+yet show a clear gain. A fair conclusion requires comparing them with the
+downloaded pretrained checkpoint and with a matched RGB-only fine-tune under the
+same data, epochs, batch size, seed, and scheduler.
 
 ## Neck injection quick start
 
