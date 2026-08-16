@@ -36,6 +36,9 @@ class NeckInjectionConfig:
     image_size: int | None = 160
     spit_weights: str | None = None
     freeze_spit: bool = False
+    spit_train_mode: str = "joint"
+    spit_lr_scale: float = 1.0
+    spit_freeze_epochs: int = 0
     drop_delta: bool = False
     bbox_reg: bool = True
     mode: str = "bilinear"
@@ -83,6 +86,22 @@ class NeckInjectionConfig:
             )
         if self.token_provider != "spit":
             raise ValueError("token_provider must be 'region', 'spit_labels', or 'spit'.")
+        valid_train_modes = {"joint", "frozen", "delayed", "scratch"}
+        if self.spit_train_mode not in valid_train_modes:
+            raise ValueError(
+                f"spit_train_mode must be one of {sorted(valid_train_modes)}; "
+                f"got {self.spit_train_mode!r}."
+            )
+        if self.spit_lr_scale <= 0:
+            raise ValueError("spit_lr_scale must be positive.")
+        if self.spit_freeze_epochs < 0:
+            raise ValueError("spit_freeze_epochs must be non-negative.")
+        if self.spit_train_mode == "delayed" and self.spit_freeze_epochs <= 0:
+            raise ValueError("delayed SPiT training requires spit_freeze_epochs > 0.")
+        if self.spit_train_mode in {"frozen", "delayed"} and not self.spit_weights:
+            raise ValueError(f"SPiT train mode {self.spit_train_mode!r} requires pretrained weights.")
+        if self.spit_train_mode == "scratch" and self.spit_weights:
+            raise ValueError("scratch SPiT training must not receive pretrained spit_weights.")
         if not self.spit_weights and not self.extra_kwargs.get("allow_random_spit", False):
             raise ValueError(
                 "Full token_provider='spit' requires spit_weights by default. "

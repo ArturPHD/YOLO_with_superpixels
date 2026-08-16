@@ -6,6 +6,7 @@ TORCH="auto"
 TORCH_VERSION="2.13.0"
 FLASH_ATTN_WHEEL=""
 SPIT_REVISION="9ad9cb81130ddbefac894094e37699807811f8ea"
+RESOLVED_TORCH=""
 NO_CONSTRAINTS=0
 SKIP_TESTS=0
 RUN_SMOKE=0
@@ -122,6 +123,7 @@ install_torch() {
   else
     resolved_torch="$TORCH"
   fi
+  RESOLVED_TORCH="$resolved_torch"
 
   local index
   if [[ "$resolved_torch" == "cpu" ]]; then
@@ -175,6 +177,37 @@ install_flash_attn() {
   "$VENV_PY" -m pip install "$FLASH_ATTN_WHEEL"
 }
 
+install_spit_cuda_helpers() {
+  if [[ "${RESOLVED_TORCH:-}" == "cpu" ]]; then
+    return
+  fi
+
+  step "Installing CUDA helper libraries for CuPy/SPiT RawKernel"
+  "$VENV_PY" -m pip install nvidia-cuda-nvrtc-cu12 nvidia-cuda-runtime-cu12
+
+  site_packages="$("$VENV_PY" - <<'PY'
+import site
+print(next(p for p in site.getsitepackages() if p.endswith("site-packages")))
+PY
+)"
+  cuda_runtime_dir="$site_packages/nvidia/cuda_runtime"
+  cuda_nvrtc_dir="$site_packages/nvidia/cuda_nvrtc"
+  if [[ ! -d "$cuda_runtime_dir" || ! -d "$cuda_nvrtc_dir" ]]; then
+    echo "CUDA helper packages installed, but expected directories were not found." >&2
+    return
+  fi
+
+  cat > "$VENV_DIR/spit_cuda_env.sh" <<EOF
+export CUDA_PATH="$cuda_runtime_dir"
+export LD_LIBRARY_PATH="$cuda_nvrtc_dir/lib:$cuda_runtime_dir/lib:\${LD_LIBRARY_PATH:-}"
+export LIBRARY_PATH="$cuda_nvrtc_dir/lib:$cuda_runtime_dir/lib:\${LIBRARY_PATH:-}"
+export CPATH="$cuda_nvrtc_dir/include:$cuda_runtime_dir/include:\${CPATH:-}"
+export CUPY_CACHE_DIR="\${CUPY_CACHE_DIR:-$ROOT/.cache/cupy}"
+mkdir -p "\$CUPY_CACHE_DIR"
+EOF
+  echo "SPiT CUDA environment helper written to $VENV_DIR/spit_cuda_env.sh"
+}
+
 cd "$ROOT"
 
 step "Resolving Python"
@@ -195,6 +228,7 @@ if [[ "$NO_CONSTRAINTS" -eq 0 && -f "$CONSTRAINTS_FILE" ]]; then
 else
   "$VENV_PY" -m pip install -e ".[ultralytics,slic,opencv,dev,spit]"
 fi
+install_spit_cuda_helpers
 
 step "Preparing SPiT checkout"
 mkdir -p "$THIRD_PARTY_DIR"

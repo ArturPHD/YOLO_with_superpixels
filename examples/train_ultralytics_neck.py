@@ -55,7 +55,33 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow full token_provider=spit without pretrained SPiT weights. Use only for a deliberate ablation.",
     )
-    parser.add_argument("--freeze-spit", action="store_true")
+    parser.add_argument(
+        "--spit-train-mode",
+        choices=["joint", "frozen", "delayed", "scratch"],
+        default="joint",
+        help=(
+            "SPiT optimization policy: joint trains normally; frozen keeps pretrained SPiT "
+            "fixed; delayed freezes it for --spit-freeze-epochs then fine-tunes it; scratch "
+            "trains a random SPiT branch from detection loss."
+        ),
+    )
+    parser.add_argument(
+        "--spit-lr-scale",
+        type=float,
+        default=1.0,
+        help="SPiT optimizer LR as a multiplier of the matching YOLO optimizer group LR.",
+    )
+    parser.add_argument(
+        "--spit-freeze-epochs",
+        type=int,
+        default=0,
+        help="Complete epochs to keep SPiT frozen in delayed mode; 21 unfreezes at epoch 22.",
+    )
+    parser.add_argument(
+        "--freeze-spit",
+        action="store_true",
+        help="Legacy static freeze flag. Prefer --spit-train-mode frozen for training runs.",
+    )
     parser.add_argument("--drop-delta", action="store_true")
     parser.add_argument("--no-bbox-reg", action="store_true")
     parser.add_argument("--region-algorithm", choices=["torch_slic", "torch_grid", "torch_voronoi"], default="torch_slic")
@@ -99,6 +125,9 @@ def build_config(args: argparse.Namespace) -> NeckInjectionConfig:
         image_size=None if args.spit_image_size <= 0 else args.spit_image_size,
         spit_weights=args.spit_weights,
         freeze_spit=args.freeze_spit,
+        spit_train_mode=args.spit_train_mode,
+        spit_lr_scale=args.spit_lr_scale,
+        spit_freeze_epochs=args.spit_freeze_epochs,
         drop_delta=args.drop_delta,
         bbox_reg=not args.no_bbox_reg,
         region_algorithm=args.region_algorithm,

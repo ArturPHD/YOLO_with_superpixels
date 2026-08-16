@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,53 @@ def _local_relabel(labels: torch.Tensor) -> torch.Tensor:
         )
         output[batch_index] = inverse.view_as(labels[batch_index]).long() + 1
     return output
+
+
+def _ensure_device(name: str, tensor: torch.Tensor, expected: torch.device) -> None:
+    if tensor.device != expected:
+        raise RuntimeError(
+            f"{name} moved from {expected} to {tensor.device}. "
+            "Full SPiT neck injection is expected to keep tensors on the input device."
+        )
+
+
+def _strip_known_prefix(key: str) -> str:
+    for prefix in ("module.", "spit."):
+        if key.startswith(prefix):
+            return key.removeprefix(prefix)
+    return key
+
+
+def _extract_checkpoint_state(checkpoint: Any) -> dict[str, torch.Tensor]:
+    if isinstance(checkpoint, dict):
+        for key in ("state_dict", "model_state_dict", "model"):
+            nested = checkpoint.get(key)
+            if isinstance(nested, dict):
+                checkpoint = nested
+                break
+    if not isinstance(checkpoint, dict):
+        raise TypeError("SPiT checkpoint must be a state_dict or contain a state_dict-like entry.")
+    return {str(key): value for key, value in checkpoint.items() if torch.is_tensor(value)}
+
+
+def _compatible_state_dict(
+    module: nn.Module,
+    state: dict[str, torch.Tensor],
+) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
+    current = module.state_dict()
+    compatible: dict[str, torch.Tensor] = {}
+    skipped: dict[str, str] = {}
+    for key, value in state.items():
+        normalized_key = _strip_known_prefix(key)
+        expected = current.get(normalized_key)
+        if expected is None:
+            skipped[normalized_key] = "missing"
+            continue
+        if tuple(expected.shape) != tuple(value.shape):
+            skipped[normalized_key] = f"shape {tuple(value.shape)} != {tuple(expected.shape)}"
+            continue
+        compatible[normalized_key] = value
+    return compatible, skipped
 
 
 def tokens_to_dense_map(bundle: TokenBundle, output_size: tuple[int, int]) -> torch.Tensor:
@@ -137,6 +185,11 @@ class SPiTTokenProvider(nn.Module):
         kwargs.setdefault("mode", mode)
 
         self.image_size = _parse_size(image_size)
+        self.loaded_spit_weights: str | None = None
+        self.loaded_spit_weight_keys = 0
+        self.skipped_spit_weight_keys: dict[str, str] = {}
+        self.missing_spit_weight_keys: list[str] = []
+        self._spit_frozen = False
         self.spit = SPiT(
             emb_dim=emb_dim,
             num_bins=num_bins,
@@ -151,38 +204,109 @@ class SPiTTokenProvider(nn.Module):
         )
         if spit_weights:
             checkpoint = torch.load(spit_weights, map_location="cpu", weights_only=False)
-            state = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
-            self.spit.load_state_dict(state, strict=False)
-        if freeze:
-            for parameter in self.spit.parameters():
-                parameter.requires_grad_(False)
-            self.spit.eval()
+            state = _extract_checkpoint_state(checkpoint)
+            compatible, skipped = _compatible_state_dict(self.spit, state)
+            if not compatible:
+                raise RuntimeError(f"No compatible SPiT weights were found in {spit_weights}.")
+            load_result = self.spit.load_state_dict(compatible, strict=False)
+            self.loaded_spit_weights = str(spit_weights)
+            self.loaded_spit_weight_keys = len(compatible)
+            self.skipped_spit_weight_keys = skipped
+            self.missing_spit_weight_keys = list(load_result.missing_keys)
+        self.set_spit_frozen(freeze)
 
     @property
     def emb_dim(self) -> int:
         return int(self.spit.embedder.emb_dim)
 
+    @property
+    def spit_frozen(self) -> bool:
+        """Whether the learned SPiT module is currently frozen."""
+
+        return bool(self._spit_frozen)
+
+    def set_spit_frozen(self, frozen: bool) -> None:
+        """Freeze or unfreeze learned SPiT parameters without replacing the module."""
+
+        self._spit_frozen = bool(frozen)
+        for parameter in self.spit.parameters():
+            parameter.requires_grad_(not self._spit_frozen)
+
+        if self._spit_frozen:
+            self.spit.eval()
+        else:
+            self.spit.train(self.training)
+
+    def train(self, mode: bool = True):
+        """Keep a frozen SPiT encoder in eval mode when the parent YOLO enters train mode."""
+
+        super().train(mode)
+        if self._spit_frozen:
+            self.spit.eval()
+        return self
+
+    def spit_parameter_counts(self) -> tuple[int, int]:
+        """Return ``(trainable, total)`` learned SPiT parameter counts."""
+
+        total = sum(parameter.numel() for parameter in self.spit.parameters())
+        trainable = sum(
+            parameter.numel() for parameter in self.spit.parameters() if parameter.requires_grad
+        )
+        return trainable, total
+
+    def _ensure_float32_spit(self) -> None:
+        """Keep SPiT in fp32 even when Ultralytics trains YOLO with AMP."""
+
+        for parameter in self.spit.parameters():
+            if parameter.is_floating_point() and parameter.dtype != torch.float32:
+                self.spit.float()
+                return
+        for buffer in self.spit.buffers():
+            if buffer.is_floating_point() and buffer.dtype != torch.float32:
+                self.spit.float()
+                return
+
     def forward(self, rgb: torch.Tensor) -> TokenBundle:
         if rgb.ndim != 4 or rgb.shape[1] < 3:
             raise ValueError(f"Expected Bx3xHxW RGB input, got shape {tuple(rgb.shape)}.")
 
-        rgb = rgb[:, :3].detach().float().clamp(0.0, 1.0)
-        if self.image_size is not None and tuple(rgb.shape[-2:]) != self.image_size:
-            rgb = F.interpolate(rgb, size=self.image_size, mode="bilinear", align_corners=False)
+        input_device = rgb.device
+        autocast_context = (
+            torch.amp.autocast(device_type=input_device.type, enabled=False)
+            if input_device.type in {"cuda", "cpu"}
+            else nullcontext()
+        )
+        with autocast_context:
+            self._ensure_float32_spit()
+            rgb = rgb[:, :3].detach().float().clamp(0.0, 1.0)
+            if self.image_size is not None and tuple(rgb.shape[-2:]) != self.image_size:
+                rgb = F.interpolate(rgb, size=self.image_size, mode="bilinear", align_corners=False)
 
-        features, labels, coords = self.spit.tokenizer(rgb, None)
-        features = self.spit.extractor(features, labels, coords)
-        embed_dtype = next(self.spit.embedder.parameters()).dtype
-        features = features.to(dtype=embed_dtype)
-        features, attention_mask, _global_idx, batch_idx = self.spit.embedder(features, labels, coords)
-        features = self.spit.doi(features)
+            features, labels, coords = self.spit.tokenizer(rgb, None)
+            if input_device.type == "cuda":
+                _ensure_device("SPiT tokenizer features", features, input_device)
+                _ensure_device("SPiT tokenizer labels", labels, input_device)
+                _ensure_device("SPiT tokenizer coords", coords, input_device)
+            features = self.spit.extractor(features, labels, coords)
+            if input_device.type == "cuda":
+                _ensure_device("SPiT extractor features", features, input_device)
+            features = features.to(dtype=torch.float32)
+            features, attention_mask, _global_idx, batch_idx = self.spit.embedder(features, labels, coords)
+            if input_device.type == "cuda":
+                _ensure_device("SPiT embedded tokens", features, input_device)
+                _ensure_device("SPiT attention mask", attention_mask, input_device)
+                _ensure_device("SPiT batch index", batch_idx, input_device)
+            features = self.spit.doi(features)
 
-        for block in self.spit.blocks:
-            features = block(features, attention_mask, batch_idx)
+            for block in self.spit.blocks:
+                features = block(features, attention_mask, batch_idx)
 
-        batch, max_tokens = attention_mask.shape
-        features = self.spit.norm(features).view(batch, max_tokens, -1)
-        local_labels = _local_relabel(labels)
+            batch, max_tokens = attention_mask.shape
+            features = self.spit.norm(features).view(batch, max_tokens, -1)
+            local_labels = _local_relabel(labels)
+            if input_device.type == "cuda":
+                _ensure_device("SPiT normalized tokens", features, input_device)
+                _ensure_device("SPiT local labels", local_labels, input_device)
         return TokenBundle(
             tokens=features,
             valid_mask=attention_mask,

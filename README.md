@@ -474,6 +474,8 @@ python examples/train_ultralytics_neck.py \
 Full SPiT token path, experimental:
 
 ```bash
+source .venv/spit_cuda_env.sh  # Linux GPU clusters after scripts/setup_linux.sh
+export CUPY_CACHE_DIR="${CUPY_CACHE_DIR:-$PWD/.cache/cupy}"
 python examples/train_ultralytics_neck.py \
   --model yolo12n.pt \
   --data data.yaml \
@@ -481,20 +483,33 @@ python examples/train_ultralytics_neck.py \
   --imgsz 640 \
   --batch 8 \
   --device 0 \
-  --fusion add \
+  --fusion cross_attention \
   --token-provider spit \
   --spit-tokenizer superpixel \
   --spit-weights path/to/spit_checkpoint.pt \
   --spit-image-size 160 \
   --project runs/superpixel_neck \
-  --name yolo12n_full_spit_tokens_add
+  --name yolo12n_full_spit_tokens_cross_attention
 ```
 
 If you deliberately want a random-SPiT ablation, add `--allow-random-spit`.
 Without pretrained SPiT weights, the full token path is not a meaningful
-Marius/SPiT representation; it is only a control experiment. Throughput-test this
-path before a long run, because the full extractor/embedder path is heavier than
-`region` or `spit_labels`.
+Marius/SPiT representation; it is only a control experiment. Full
+`token_provider=spit` runs the SPiT tokenizer, interpolation/histogram extractor,
+embedder, masked ViT blocks, and normalization before the YOLO neck attention
+block. CUDA tensors stay on CUDA in the project wrapper; SPiT itself uses CuPy
+RawKernels through DLPack, so the first call may spend time compiling kernels.
+On Linux clusters, `scripts/setup_linux.sh` installs the CUDA12 NVRTC/runtime
+helper packages and writes `.venv/spit_cuda_env.sh`; source that file in Slurm
+jobs before running full SPiT. Set a stable `CUPY_CACHE_DIR` and throughput-test
+this path before a long run, because the full extractor/embedder path is heavier
+than `region` or `spit_labels`.
+
+On Windows PowerShell, set the same cache variable with:
+
+```powershell
+$env:CUPY_CACHE_DIR = "$PWD\.cache\cupy"
+```
 
 Validate with injection enabled and disabled:
 

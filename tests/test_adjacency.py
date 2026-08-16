@@ -281,6 +281,22 @@ def test_distance_builder_can_disable_prebuilt_soft_channel():
     torch.testing.assert_close(output[:, 3:], torch.zeros(2, 1, 8, 8))
 
 
+def test_distance_builder_can_disable_with_per_channel_values():
+    builder = DistanceChannelBuilder(
+        TensorLabelAlgorithm(),
+        mode="soft_boundary_interior",
+        enabled=False,
+        disabled_values=(1.0, 0.0),
+    )
+    images = torch.rand(2, 5, 8, 8)
+
+    output = builder.append_to_batch(images)
+
+    torch.testing.assert_close(output[:, :3], images[:, :3])
+    torch.testing.assert_close(output[:, 3], torch.ones(2, 8, 8))
+    torch.testing.assert_close(output[:, 4], torch.zeros(2, 8, 8))
+
+
 def test_adjacency_builder_default_representation_is_zero_centered():
     builder = AdjacencyChannelBuilder(TensorValidNeighborAlgorithm())
     images = torch.rand(1, 3, 4, 5)
@@ -302,6 +318,21 @@ def test_adjacency_builder_can_disable_extra_channels_without_algorithm_call():
     assert output.shape == (2, 5, 4, 5)
     torch.testing.assert_close(output[:, :3], images)
     torch.testing.assert_close(output[:, 3:], torch.zeros((2, 2, 4, 5)))
+
+
+def test_adjacency_builder_can_disable_with_per_channel_values():
+    builder = AdjacencyChannelBuilder(
+        TensorOnlyAlgorithm(),
+        enabled=False,
+        disabled_values=(0.0, 1.0),
+    )
+    images = torch.rand(2, 5, 4, 5)
+
+    output = builder.append_to_batch(images)
+
+    torch.testing.assert_close(output[:, :3], images[:, :3])
+    torch.testing.assert_close(output[:, 3], torch.zeros(2, 4, 5))
+    torch.testing.assert_close(output[:, 4], torch.ones(2, 4, 5))
 
 
 def test_adjacency_builder_supports_rgb_only_no_algorithm():

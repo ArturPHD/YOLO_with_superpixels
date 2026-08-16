@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from importlib import import_module
 import math
+import os
 from pathlib import Path
 import sys
 from typing import Any, Callable, Protocol, Sequence
@@ -72,6 +73,30 @@ def _normalize_torch_image_batch(batch_tensor):
     if batch_tensor.ndim != 4 or batch_tensor.shape[1] < 3:
         raise ValueError(f"Expected a BxCxHxW tensor with at least 3 channels, got {batch_tensor.shape}.")
     return batch_tensor[:, :3].detach().float().clamp(0.0, 1.0)
+
+
+def ensure_cupy_kernel_cache_dir() -> Path | None:
+    """Set a stable CuPy kernel cache directory unless the user already did.
+
+    SPiT uses CuPy RawKernels through DLPack. The first CUDA call JIT-compiles
+    those kernels, and an unstable/default temp cache can look like a tokenizer
+    hang on Windows or shared cluster nodes. This helper does not import CuPy; it
+    only prepares the environment before SPiT imports/compiles its kernels.
+    """
+
+    configured = os.environ.get("CUPY_CACHE_DIR")
+    if configured:
+        return Path(configured)
+
+    base = Path(os.environ.get("YOLO_SUPERPIXELS_CACHE_DIR", Path.home() / ".cache" / "yolo_superpixels"))
+    cache_dir = base / "cupy"
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+
+    os.environ["CUPY_CACHE_DIR"] = str(cache_dir)
+    return cache_dir
 
 
 def _select_ordered_edges(edges, channel_order: Sequence[str]):
@@ -872,6 +897,7 @@ class SPiTDenseEdgeAlgorithm:
 
     @staticmethod
     def _ensure_local_spit_on_path() -> None:
+        ensure_cupy_kernel_cache_dir()
         for parent in Path(__file__).resolve().parents:
             candidate = parent / "third_party" / "SPiT"
             if (candidate / "spit" / "tokenizer" / "densesp.py").exists():

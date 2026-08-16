@@ -85,6 +85,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--soft-max-distance", type=int, default=32)
     parser.add_argument("--soft-boundary-width", type=float, default=6.0)
     parser.add_argument("--soft-affinity-threshold", type=float, default=0.5)
+    parser.add_argument(
+        "--disabled-value",
+        type=float,
+        default=0.0,
+        help="Scalar used when --extra-channels disabled and --disabled-values is omitted.",
+    )
+    parser.add_argument(
+        "--disabled-values",
+        type=float,
+        nargs="*",
+        default=None,
+        help="Per-extra-channel constants used when --extra-channels disabled, e.g. 1 0.",
+    )
     parser.add_argument("--spit-module", default="spit.tokenizer.densesp")
     parser.add_argument("--spit-class", default="DenseSPEdgeEmbedder")
     parser.add_argument("--spit-device", default="auto")
@@ -191,6 +204,8 @@ def run_val(args: argparse.Namespace, enabled: bool):
         soft_max_distance=args.soft_max_distance,
         soft_boundary_width=args.soft_boundary_width,
         soft_affinity_threshold=args.soft_affinity_threshold,
+        disabled_value=args.disabled_value,
+        disabled_values=args.disabled_values,
     )
     val_kwargs = {
         "data": args.data,

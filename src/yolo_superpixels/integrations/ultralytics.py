@@ -125,6 +125,8 @@ def adapter_from_environment() -> "SuperpixelYOLOAdapter":
         algorithm_kwargs = json.loads(os.environ.get(_env_key("ALGORITHM_KWARGS"), "{}"))
     channel_order = tuple(json.loads(os.environ.get(_env_key("CHANNEL_ORDER"), '["right", "down"]')))
     target_channels_env = os.environ.get(_env_key("TARGET_CHANNELS"))
+    disabled_values_raw = os.environ.get(_env_key("DISABLED_VALUES"))
+    disabled_values = json.loads(disabled_values_raw) if disabled_values_raw else None
 
     return SuperpixelYOLOAdapter(
         algorithm_names=algorithm_names,
@@ -139,6 +141,7 @@ def adapter_from_environment() -> "SuperpixelYOLOAdapter":
         fail_open=_parse_bool(os.environ.get(_env_key("FAIL_OPEN")), False),
         extra_channels_enabled=_parse_bool(os.environ.get(_env_key("EXTRA_CHANNELS_ENABLED")), True),
         disabled_value=float(os.environ.get(_env_key("DISABLED_VALUE"), "0.0")),
+        disabled_values=disabled_values,
         init_extra=os.environ.get(_env_key("INIT_EXTRA"), "tiny"),
         target_channels=int(target_channels_env) if target_channels_env else None,
         base_channels=int(os.environ.get(_env_key("BASE_CHANNELS"), "3")),
@@ -163,6 +166,7 @@ class SuperpixelYOLOAdapter:
     fail_open: bool = False
     extra_channels_enabled: bool = True
     disabled_value: float = 0.0
+    disabled_values: Sequence[float] | None = None
     init_extra: str = "tiny"
     target_channels: int | None = None
     base_channels: int = 3
@@ -219,6 +223,7 @@ class SuperpixelYOLOAdapter:
             "fail_open": self.fail_open,
             "extra_channels_enabled": self.extra_channels_enabled,
             "disabled_value": self.disabled_value,
+            "disabled_values": list(self.disabled_values) if self.disabled_values is not None else None,
             "init_extra": self.init_extra,
             "target_channels": self.target_channels,
             "base_channels": self.base_channels,
@@ -277,6 +282,7 @@ class SuperpixelYOLOAdapter:
                 fail_open=self.fail_open,
                 enabled=self.extra_channels_enabled,
                 disabled_value=self.disabled_value,
+                disabled_values=self.disabled_values,
             )
         return AdjacencyChannelBuilder(
             algorithm=self.algorithms,
@@ -286,6 +292,7 @@ class SuperpixelYOLOAdapter:
             fail_open=self.fail_open,
             enabled=self.extra_channels_enabled,
             disabled_value=self.disabled_value,
+            disabled_values=self.disabled_values,
         )
 
     def export_environment(self) -> None:
@@ -308,6 +315,10 @@ class SuperpixelYOLOAdapter:
         os.environ[_env_key("FAIL_OPEN")] = "1" if self.fail_open else "0"
         os.environ[_env_key("EXTRA_CHANNELS_ENABLED")] = "1" if self.extra_channels_enabled else "0"
         os.environ[_env_key("DISABLED_VALUE")] = str(self.disabled_value)
+        if self.disabled_values is None:
+            os.environ.pop(_env_key("DISABLED_VALUES"), None)
+        else:
+            os.environ[_env_key("DISABLED_VALUES")] = json.dumps(list(self.disabled_values))
         os.environ[_env_key("INIT_EXTRA")] = self.init_extra
         os.environ[_env_key("TARGET_CHANNELS")] = str(int(self.target_channels))
         os.environ[_env_key("BASE_CHANNELS")] = str(self.base_channels)

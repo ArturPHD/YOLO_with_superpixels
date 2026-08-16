@@ -393,6 +393,38 @@ def distance_mode_extra_channels(mode: DistanceChannelMode) -> int:
     return 2 if mode == "soft_boundary_interior" else 1
 
 
+def _disabled_channel_values_for_batch(
+    batch_tensor,
+    channels: int,
+    disabled_value: float = 0.0,
+    disabled_values: Sequence[float] | None = None,
+):
+    """Return disabled extra channels filled by one scalar or per-channel values."""
+
+    import torch
+
+    if batch_tensor.ndim != 4:
+        raise ValueError(f"Expected a BCHW tensor, got shape {batch_tensor.shape}.")
+
+    batch_size, _, height, width = batch_tensor.shape
+    if disabled_values is None:
+        return torch.full(
+            (batch_size, channels, height, width),
+            fill_value=disabled_value,
+            dtype=batch_tensor.dtype,
+            device=batch_tensor.device,
+        )
+
+    values = tuple(float(value) for value in disabled_values)
+    if len(values) != channels:
+        raise ValueError(
+            f"Expected {channels} disabled_values entries, got {len(values)}."
+        )
+    constants = torch.as_tensor(values, dtype=batch_tensor.dtype, device=batch_tensor.device)
+    constants = constants.view(1, channels, 1, 1)
+    return constants.expand(batch_size, channels, height, width).clone()
+
+
 def tensor_labels_to_boundary_mask(labels):
     """Return a boolean mask of pixels touching a superpixel/image boundary."""
 
@@ -605,6 +637,7 @@ class AdjacencyChannelBuilder:
     fail_open: bool = False
     enabled: bool = True
     disabled_value: float = 0.0
+    disabled_values: Sequence[float] | None = None
 
     def __post_init__(self) -> None:
         self.edge_representation = _validate_representation(self.edge_representation)
@@ -624,17 +657,14 @@ class AdjacencyChannelBuilder:
     def disabled_edges_for_batch(self, batch_tensor):
         """Return disabled extra channels without running the superpixel algorithm."""
 
-        import torch
-
         if batch_tensor.ndim != 4:
             raise ValueError(f"Expected a BCHW tensor, got shape {batch_tensor.shape}.")
 
-        batch_size, _, height, width = batch_tensor.shape
-        return torch.full(
-            (batch_size, self.extra_channels, height, width),
-            fill_value=self.disabled_value,
-            dtype=batch_tensor.dtype,
-            device=batch_tensor.device,
+        return _disabled_channel_values_for_batch(
+            batch_tensor,
+            channels=self.extra_channels,
+            disabled_value=self.disabled_value,
+            disabled_values=self.disabled_values,
         )
 
     def _edges_for_tensor_single(self, algorithm: SuperpixelAlgorithm, image_tensor):
@@ -671,12 +701,7 @@ class AdjacencyChannelBuilder:
 
         height, width = image_tensor.shape[-2:]
         if not self.enabled:
-            return torch.full(
-                (self.extra_channels, height, width),
-                fill_value=self.disabled_value,
-                dtype=image_tensor.dtype,
-                device=image_tensor.device,
-            )
+            return self.disabled_edges_for_batch(image_tensor.unsqueeze(0))[0]
         if not self.algorithms:
             return torch.empty((0, height, width), dtype=image_tensor.dtype, device=image_tensor.device)
         return torch.cat(
@@ -765,7 +790,7 @@ class AdjacencyChannelBuilder:
         if batch_tensor.shape[1] == expected_channels:
             if not self.enabled:
                 output = batch_tensor.clone()
-                output[:, 3:expected_channels] = self.disabled_value
+                output[:, 3:expected_channels] = self.disabled_edges_for_batch(batch_tensor)
                 return output
             return batch_tensor
         if batch_tensor.shape[1] != 3:
@@ -796,6 +821,7 @@ class DistanceChannelBuilder:
     fail_open: bool = False
     enabled: bool = True
     disabled_value: float = 0.0
+    disabled_values: Sequence[float] | None = None
 
     def __post_init__(self) -> None:
         self.mode = _validate_distance_mode(self.mode)
@@ -825,17 +851,14 @@ class DistanceChannelBuilder:
     def disabled_channels_for_batch(self, batch_tensor):
         """Return disabled soft channels without running the superpixel algorithm."""
 
-        import torch
-
         if batch_tensor.ndim != 4:
             raise ValueError(f"Expected a BCHW tensor, got shape {batch_tensor.shape}.")
 
-        batch_size, _, height, width = batch_tensor.shape
-        return torch.full(
-            (batch_size, self.extra_channels, height, width),
-            fill_value=self.disabled_value,
-            dtype=batch_tensor.dtype,
-            device=batch_tensor.device,
+        return _disabled_channel_values_for_batch(
+            batch_tensor,
+            channels=self.extra_channels,
+            disabled_value=self.disabled_value,
+            disabled_values=self.disabled_values,
         )
 
     def _channels_for_tensor_single(self, algorithm: SuperpixelAlgorithm, image_tensor):
@@ -897,12 +920,7 @@ class DistanceChannelBuilder:
 
         height, width = image_tensor.shape[-2:]
         if not self.enabled:
-            return torch.full(
-                (self.extra_channels, height, width),
-                fill_value=self.disabled_value,
-                dtype=image_tensor.dtype,
-                device=image_tensor.device,
-            )
+            return self.disabled_channels_for_batch(image_tensor.unsqueeze(0))[0]
         if not self.algorithms:
             return torch.empty((0, height, width), dtype=image_tensor.dtype, device=image_tensor.device)
         return torch.cat(
@@ -1001,7 +1019,7 @@ class DistanceChannelBuilder:
         if batch_tensor.shape[1] == expected_channels:
             if not self.enabled:
                 output = batch_tensor.clone()
-                output[:, 3:expected_channels] = self.disabled_value
+                output[:, 3:expected_channels] = self.disabled_channels_for_batch(batch_tensor)
                 return output
             return batch_tensor
         if batch_tensor.shape[1] != 3:
