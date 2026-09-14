@@ -218,7 +218,7 @@ def _spit_metadata(root: Path) -> dict[str, Any]:
 def _external_file_metadata(config: dict[str, Any], root: Path) -> dict[str, Any]:
     values = {}
     for key, value in _iter_config_values(config):
-        if key in {"spit_weights", "weights"} and isinstance(value, str) and value:
+        if key in {"base_model_path", "spit_weights", "weights"} and isinstance(value, str) and value:
             values[key] = file_metadata(value, root=root)
     return values
 

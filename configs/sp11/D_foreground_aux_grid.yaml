@@ -1,0 +1,18 @@
+experiment: SP-11-D
+description: Arm B plus deterministic torch_grid pure-region consistency control.
+strategy: structural_supervision
+initialization:
+  base_model_path: yolo12n.pt
+  base_model_sha256: record_at_launch
+  seed: 0
+  auxiliary_init_seed: 0
+structural_supervision:
+  lambda_fg: 0.05
+  lambda_sp: 0.05
+  foreground_loss_type: balanced_bce
+  head_init: tiny
+  purity_threshold: 0.9
+  min_region_size: 4
+  region_algorithm: torch_grid
+  region_kwargs:
+    n_segments: 300

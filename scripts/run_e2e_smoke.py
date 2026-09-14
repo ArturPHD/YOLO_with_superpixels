@@ -26,7 +26,12 @@ import yaml
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
-STRATEGIES = ("input", "neck", "auxiliary")
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    # Child processes execute this file from scripts/, while the package lives in src/.
+    sys.path.insert(0, str(SRC))
+
+STRATEGIES = ("input", "neck", "auxiliary", "structural")
 INPUT_CHANNEL_MODES = ("adjacency", "soft_interior", "soft_boundary", "soft_boundary_interior")
 
 
@@ -135,6 +140,20 @@ def auxiliary_config():
     )
 
 
+def structural_config():
+    from yolo_superpixels import StructuralSupervisionConfig
+
+    return StructuralSupervisionConfig(
+        lambda_fg=0.05,
+        lambda_sp=0.05,
+        region_algorithm="torch_slic",
+        region_kwargs={"n_segments": 16, "compactness": 1.0, "num_iters": 2},
+        purity_threshold=0.9,
+        min_region_size=1,
+        auxiliary_init_seed=0,
+    )
+
+
 def build_model(
     strategy: str,
     model_path: str,
@@ -166,7 +185,17 @@ def build_model(
         from yolo_superpixels import SuperpixelAuxiliaryYOLO
 
         return SuperpixelAuxiliaryYOLO(model_path, config=auxiliary_config())
+    if strategy == "structural":
+        from yolo_superpixels import SuperpixelStructuralYOLO
+
+        return SuperpixelStructuralYOLO(model_path, config=structural_config())
     raise ValueError(f"Unknown strategy: {strategy}")
+
+
+def run_project(run_root: str | Path, phase: str) -> str:
+    """Return an absolute project path so Ultralytics does not prepend runs/detect."""
+
+    return str((Path(run_root).resolve() / phase))
 
 
 def worker_train(args: argparse.Namespace) -> None:
@@ -189,7 +218,7 @@ def worker_train(args: argparse.Namespace) -> None:
         batch=args.batch,
         workers=0,
         device=args.device,
-        project=str(Path(args.run_root) / "train"),
+        project=run_project(args.run_root, "train"),
         name=args.strategy[0],
         exist_ok=True,
         plots=False,
@@ -217,7 +246,7 @@ def worker_val(args: argparse.Namespace) -> None:
         "batch": args.batch,
         "workers": 0,
         "device": args.device,
-        "project": str(Path(args.run_root) / "val"),
+        "project": run_project(args.run_root, "val"),
         "name": args.strategy[0],
         "verbose": False,
         "plots": False,
@@ -247,7 +276,7 @@ def worker_predict(args: argparse.Namespace) -> None:
         "source": args.source,
         "imgsz": args.imgsz,
         "device": args.device,
-        "project": str(Path(args.run_root) / "predict"),
+        "project": run_project(args.run_root, "predict"),
         "name": args.strategy[0],
         "save": True,
         "verbose": False,

@@ -1,0 +1,13 @@
+experiment: SP-11-A
+description: Matched ordinary RGB YOLO baseline. No SP-11 module is installed.
+strategy: rgb_baseline
+initialization:
+  base_model_path: yolo12n.pt
+  base_model_sha256: record_at_launch
+  seed: 0
+training:
+  imgsz: 640
+  epochs: 150
+  batch: 32
+  workers: 8
+  device: 0

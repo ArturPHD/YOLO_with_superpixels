@@ -371,6 +371,10 @@ def _superpixel_auxiliary_loss(prediction: torch.Tensor, target: torch.Tensor, l
 def _zero_loss_item(loss_items):
     if isinstance(loss_items, torch.Tensor):
         return loss_items.new_zeros(())
+    if isinstance(loss_items, dict):
+        for value in loss_items.values():
+            if isinstance(value, torch.Tensor):
+                return value.new_zeros(())
     return torch.tensor(0.0)
 
 
@@ -382,6 +386,8 @@ def _append_loss_item(loss_items, item: torch.Tensor):
         return [*loss_items, item]
     if isinstance(loss_items, tuple):
         return (*loss_items, item)
+    if isinstance(loss_items, dict):
+        return {**loss_items, "sp_loss": item}
     return loss_items
 
 

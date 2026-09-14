@@ -47,6 +47,24 @@ def test_superpixel_run_config_includes_source_tree_fingerprint(tmp_path, monkey
     assert payload["config"] == {"token_provider": "spit", "spit_weights": str(weights)}
 
 
+def test_superpixel_run_config_hashes_base_model_checkpoint(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "model.py").write_text("x = 1\n", encoding="utf-8")
+    checkpoint = root / "yolo12n.pt"
+    checkpoint.write_bytes(b"pretrained-yolo-weights")
+    monkeypatch.setattr(run_config, "_repo_root", lambda: root)
+
+    run_config.write_superpixel_run_config(
+        tmp_path / "run",
+        "structural_supervision",
+        {"base_model_path": str(checkpoint)},
+    )
+
+    payload = json.loads((tmp_path / "run" / "superpixel_config.json").read_text(encoding="utf-8"))
+    assert payload["external_files"]["base_model_path"] == run_config.file_metadata(checkpoint)
+
+
 def test_spit_metadata_hashes_external_checkout(tmp_path):
     root = tmp_path / "repo"
     spit = root / "third_party" / "SPiT"

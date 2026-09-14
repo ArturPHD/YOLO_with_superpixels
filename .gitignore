@@ -1,4 +1,5 @@
 .venv/
+.venv*/
 .idea/
 __pycache__/
 *.py[cod]
@@ -32,4 +33,5 @@ visualizations/
 third_party/SPiT/
 third_party/*
 !third_party/README.md
+/spit.zip
 *.cache

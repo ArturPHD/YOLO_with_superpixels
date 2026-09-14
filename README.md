@@ -12,6 +12,9 @@ implemented:
 - `auxiliary_loss`: YOLO keeps RGB input for inference, but during training a
   tiny auxiliary head asks an intermediate YOLO feature map to reproduce
   superpixel right/down structure.
+- `structural_supervision` (SP-11): YOLO keeps RGB input and receives a
+  train-only P3 foregroundness loss; an optional SLIC-like region-consistency
+  term makes predictions coherent only inside unambiguous regions.
 
 For default `input_channels`, the two extra channels are:
 
@@ -41,11 +44,14 @@ src/yolo_superpixels/
       patch.py             # auto-detect Detect.f[0] and wrap the neck layer
     auxiliary_loss/        # training-only superpixel structure loss
       patch.py             # training-only auxiliary head/loss and strip helper
+    structural_supervision/ # train-only box foreground and region-consistency loss
+      patch.py             # SP-11 P3 head, box target, consistency loss, strip helper
     base.py                # common strategy protocol/metadata
   integrations/
     ultralytics.py         # Ultralytics YOLO trainer/wrapper
     ultralytics_neck.py    # Ultralytics wrapper for neck injection
     ultralytics_auxiliary.py # Ultralytics wrapper for auxiliary-loss training
+    ultralytics_structural.py # Ultralytics wrapper for SP-11 training
 
 configs/                   # experiment configs
 examples/                  # runnable examples
@@ -973,7 +979,7 @@ For a production-like lifecycle smoke on a tiny generated dataset, run:
 
 This launches separate Python processes for train, checkpoint load + val, and
 checkpoint load + predict. To run the same lifecycle for all current strategies,
-use `--strategy input neck auxiliary`. The pytest wrapper is opt-in:
+use `--strategy input neck auxiliary structural`. The pytest wrapper is opt-in:
 
 ```powershell
 $env:YOLO_SUPERPIXELS_RUN_E2E="1"

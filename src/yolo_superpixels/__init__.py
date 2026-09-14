@@ -58,6 +58,13 @@ __all__ = [
     "AuxiliaryLossPatchResult",
     "AuxiliaryLossYOLOAdapter",
     "BackboneAuxLossStrategy",
+    "ForegroundnessHead",
+    "StructuralSupervisionConfig",
+    "StructuralSupervisionDetectionTrainer",
+    "StructuralSupervisionPatchResult",
+    "StructuralSupervisionStrategy",
+    "StructuralSupervisionYOLOAdapter",
+    "SuperpixelStructuralYOLO",
     "SuperpixelConv2d",
     "SuperpixelAuxiliaryYOLO",
     "SuperpixelNeckYOLO",
@@ -71,7 +78,9 @@ __all__ = [
     "patch_first_conv2d",
     "patch_auxiliary_loss",
     "patch_neck_injection",
+    "patch_structural_supervision",
     "strip_auxiliary_loss",
+    "strip_structural_supervision",
 ]
 
 _LAZY_EXPORTS = {
@@ -97,6 +106,24 @@ _LAZY_EXPORTS = {
     "AuxiliaryLossDetectionTrainer": (".integrations.ultralytics_auxiliary", "AuxiliaryLossDetectionTrainer"),
     "AuxiliaryLossYOLOAdapter": (".integrations.ultralytics_auxiliary", "AuxiliaryLossYOLOAdapter"),
     "SuperpixelAuxiliaryYOLO": (".integrations.ultralytics_auxiliary", "SuperpixelAuxiliaryYOLO"),
+    "ForegroundnessHead": (".strategies.structural_supervision", "ForegroundnessHead"),
+    "StructuralSupervisionConfig": (".strategies.structural_supervision", "StructuralSupervisionConfig"),
+    "StructuralSupervisionPatchResult": (
+        ".strategies.structural_supervision",
+        "StructuralSupervisionPatchResult",
+    ),
+    "StructuralSupervisionStrategy": (".strategies.structural_supervision", "StructuralSupervisionStrategy"),
+    "patch_structural_supervision": (".strategies.structural_supervision", "patch_structural_supervision"),
+    "strip_structural_supervision": (".strategies.structural_supervision", "strip_structural_supervision"),
+    "StructuralSupervisionDetectionTrainer": (
+        ".integrations.ultralytics_structural",
+        "StructuralSupervisionDetectionTrainer",
+    ),
+    "StructuralSupervisionYOLOAdapter": (
+        ".integrations.ultralytics_structural",
+        "StructuralSupervisionYOLOAdapter",
+    ),
+    "SuperpixelStructuralYOLO": (".integrations.ultralytics_structural", "SuperpixelStructuralYOLO"),
 }
 
 
