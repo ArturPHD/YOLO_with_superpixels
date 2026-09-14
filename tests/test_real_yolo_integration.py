@@ -163,13 +163,14 @@ def test_real_yolo_sp11_train_batch_checkpoint_reload_and_eval(weights_name, exp
     loss, loss_items = model(batch)
     assert torch.isfinite(loss).all()
     if isinstance(loss_items, dict):
-        assert loss_items["fg_aux_loss"] > 0
-        assert loss_items["sp_consistency_loss"] >= 0
-        assert "sp_active_pure_regions" in loss_items
+        assert loss_items["fg_aux_loss_raw"] > 0
+        assert loss_items["fg_aux_loss_weighted"] > 0
+        assert loss_items["sp_consistency_loss_raw"] >= 0
+        assert "sp_active_foreground_regions" in loss_items
     else:
-        assert loss_items.shape[0] == 12
-        assert loss_items[3] > 0  # fg_aux_loss
-        assert loss_items[4] >= 0  # sp_consistency_loss
+        assert loss_items.shape[0] == 18
+        assert loss_items[3] > 0  # fg_aux_loss_raw
+        assert loss_items[5] >= 0  # sp_consistency_loss_raw
 
     checkpoint = tmp_path / "sp11_state.pt"
     torch.save(model.state_dict(), checkpoint)
@@ -180,3 +181,16 @@ def test_real_yolo_sp11_train_batch_checkpoint_reload_and_eval(weights_name, exp
     with torch.no_grad():
         prediction = restored(torch.rand(1, 3, 64, 64))
     assert prediction is not None
+
+
+@pytest.mark.parametrize("weights_name", ["yolo12n.pt", "yolo26n.pt"])
+def test_real_yolo_sp11_head_parameters_are_in_optimizer_before_forward(weights_name):
+    model = _load_real_yolo(weights_name)
+    result = patch_structural_supervision(model, StructuralSupervisionConfig(lambda_sp=0.0), install_criterion=True)
+    wrapper = model.model[result.target_layer]
+    assert isinstance(wrapper, StructuralSupervisionWrapper)
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
+    optimizer_ids = {id(parameter) for group in optimizer.param_groups for parameter in group["params"]}
+    head_parameters = [parameter for parameter in wrapper.head.parameters() if parameter.requires_grad]
+    assert head_parameters
+    assert all(id(parameter) in optimizer_ids for parameter in head_parameters)

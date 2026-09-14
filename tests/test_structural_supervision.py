@@ -74,6 +74,32 @@ def make_batch(boxes=None, batch_idx=None, batch_size=1, size=8):
     return {"img": torch.rand(batch_size, 3, size, size), "bboxes": boxes, "batch_idx": batch_idx}
 
 
+def reference_foreground_target(batch, size):
+    """Pre-vectorization CPU semantics retained as a regression oracle."""
+
+    image = batch["img"]
+    target = torch.zeros((image.shape[0], 1, *size), dtype=torch.float32)
+    boxes, indices = batch["bboxes"], batch["batch_idx"]
+    normalized = bool(boxes.numel() and boxes.abs().max() <= 1.5)
+    for box, index in zip(boxes, indices):
+        sample = int(index)
+        if not 0 <= sample < image.shape[0]:
+            continue
+        cx, cy, box_width, box_height = box.tolist()
+        if normalized:
+            cx, cy, box_width, box_height = cx * size[1], cy * size[0], box_width * size[1], box_height * size[0]
+        else:
+            cx, cy = cx * size[1] / image.shape[-1], cy * size[0] / image.shape[-2]
+            box_width, box_height = box_width * size[1] / image.shape[-1], box_height * size[0] / image.shape[-2]
+        left = max(int(torch.floor(torch.tensor(cx - box_width / 2))), 0)
+        right = min(int(torch.ceil(torch.tensor(cx + box_width / 2))), size[1])
+        top = max(int(torch.floor(torch.tensor(cy - box_height / 2))), 0)
+        bottom = min(int(torch.ceil(torch.tensor(cy + box_height / 2))), size[0])
+        if left < right and top < bottom:
+            target[sample, 0, top:bottom, left:right] = 1
+    return target
+
+
 def test_box_to_foreground_target_zero_boxes():
     target = foreground_target_from_boxes(make_batch(), size=(4, 4))
     assert target.shape == (1, 1, 4, 4)
@@ -100,6 +126,21 @@ def test_target_uses_final_augmented_box_coordinates():
     target = foreground_target_from_boxes(make_batch(boxes, torch.tensor([0])), size=(8, 8))
     assert target[0, 0, 1:3, 5:7].all()
     assert target[0, 0, 5:7, 1:3].sum() == 0
+
+
+@pytest.mark.parametrize(
+    "boxes",
+    [
+        torch.tensor([[0.5, 0.5, 0.5, 0.5], [0.0, 0.0, 0.25, 0.25], [1.0, 1.0, 0.25, 0.25]]),
+        torch.tensor([[50.0, 40.0, 20.0, 20.0], [0.0, 0.0, 30.0, 25.0], [100.0, 80.0, 20.0, 20.0]]),
+    ],
+)
+def test_vectorized_target_matches_reference_cpu_semantics(boxes):
+    batch = make_batch(boxes, torch.tensor([0, 1, 1]), batch_size=2, size=80)
+    batch["img"] = torch.rand(2, 3, 80, 100)
+    torch.testing.assert_close(
+        foreground_target_from_boxes(batch, size=(8, 10)), reference_foreground_target(batch, (8, 10))
+    )
 
 
 def test_foreground_bce_has_gradients():
@@ -141,7 +182,8 @@ def test_pure_foreground_and_background_regions_are_active():
     target = torch.tensor([[[[0.0, 0.0], [1.0, 1.0]]]])
     labels = torch.tensor([[[1, 1], [2, 2]]])
     _, stats = region_consistency_loss(probability, labels, target, purity_threshold=0.9, min_region_size=2)
-    assert stats["active_pure_regions"] == 2
+    assert stats["active_foreground_regions"] == 1
+    assert stats["active_background_regions"] == 1
     assert stats["ignored_ambiguous_regions"] == 0
 
 
@@ -151,7 +193,8 @@ def test_ambiguous_regions_are_ignored():
     labels = torch.zeros((1, 2, 2), dtype=torch.long)
     loss, stats = region_consistency_loss(probability, labels, target, purity_threshold=0.9, min_region_size=1)
     torch.testing.assert_close(loss, probability.sum() * 0.0)
-    assert stats["active_pure_regions"] == 0
+    assert stats["active_foreground_regions"] == 0
+    assert stats["active_background_regions"] == 0
     assert stats["ignored_ambiguous_regions"] == 1
 
 
@@ -160,7 +203,8 @@ def test_minimum_region_size_excludes_tiny_regions():
     target = torch.zeros_like(probability)
     labels = torch.tensor([[[1, 1], [2, 3]]])
     _, stats = region_consistency_loss(probability, labels, target, min_region_size=2)
-    assert stats["active_pure_regions"] == 1
+    assert stats["active_foreground_regions"] == 0
+    assert stats["active_background_regions"] == 1
     assert stats["ignored_small_regions"] == 2
 
 
@@ -173,6 +217,31 @@ def test_constant_predictions_have_zero_region_variance_and_gradients():
     assert loss.abs() < 1e-7
     loss.backward()
     assert logits.grad is not None
+
+
+def test_balanced_region_loss_prevents_background_region_count_dominance():
+    probability = torch.tensor([[[[0.1, 0.3, 0.2, 0.8, 0.1, 0.9]]]])
+    target = torch.tensor([[[[1.0, 1.0, 0.0, 0.0, 0.0, 0.0]]]])
+    labels = torch.tensor([[[0, 0, 1, 1, 2, 2]]])
+    balanced, stats = region_consistency_loss(probability, labels, target, min_region_size=1)
+    all_equal, _ = region_consistency_loss(probability, labels, target, min_region_size=1, balance_policy="all_regions_equal")
+    assert stats["active_foreground_regions"] == 1
+    assert stats["active_background_regions"] == 2
+    assert stats["foreground_region_variance_raw"] == pytest.approx(0.01)
+    assert stats["background_region_variance_raw"] == pytest.approx(0.125)
+    assert balanced.item() == pytest.approx(0.0675)
+    assert all_equal.item() == pytest.approx((0.01 + 0.09 + 0.16) / 3)
+
+
+@pytest.mark.parametrize("foreground", [True, False])
+def test_region_loss_uses_the_only_available_purity_group(foreground):
+    probability = torch.tensor([[[[0.1, 0.3, 0.5, 0.7]]]])
+    target = torch.ones_like(probability) if foreground else torch.zeros_like(probability)
+    labels = torch.tensor([[[0, 0, 1, 1]]])
+    loss, stats = region_consistency_loss(probability, labels, target, min_region_size=1)
+    assert stats["active_foreground_regions"] == (2 if foreground else 0)
+    assert stats["active_background_regions"] == (0 if foreground else 2)
+    assert loss.item() == pytest.approx(0.01)
 
 
 def test_region_consistency_has_gradients():
@@ -194,7 +263,62 @@ def test_lambda_sp_zero_never_calls_region_algorithm():
     assert criterion.region_algorithm is None
     loss, items = criterion(None, make_batch(torch.tensor([[0.5, 0.5, 0.5, 0.5]]), torch.tensor([0])))
     assert torch.isfinite(loss)
-    assert items.shape[0] == 12
+    assert items.shape[0] == 18
+
+
+def test_loss_items_keep_raw_and_weighted_auxiliary_semantics():
+    context = StructuralSupervisionContext()
+    context.image = torch.rand(1, 3, 8, 8)
+    context.foreground_logits = torch.zeros((1, 1, 4, 4), requires_grad=True)
+    config = StructuralSupervisionConfig(lambda_fg=0.2, lambda_sp=0.0, scale_by_batch=False)
+    _, items = StructuralSupervisionCriterion(BaseCriterion(), context, config)(
+        None, make_batch(torch.tensor([[0.5, 0.5, 0.5, 0.5]]), torch.tensor([0]))
+    )
+    assert items[3] > 0
+    torch.testing.assert_close(items[4], items[3] * 0.2)
+    assert items[5] == 0 and items[6] == 0
+    torch.testing.assert_close(items[7], items[4] + items[6])
+
+
+def test_loss_scale_diagnostic_writes_raw_and_weighted_terms(tmp_path):
+    context = StructuralSupervisionContext()
+    context.image = torch.rand(1, 3, 8, 8)
+    context.foreground_logits = torch.zeros((1, 1, 4, 4), requires_grad=True)
+    output = tmp_path / "loss_scale.jsonl"
+    config = StructuralSupervisionConfig(
+        lambda_fg=0.2, lambda_sp=0.0, scale_by_batch=False, diagnostic_batches=1, diagnostic_output_path=str(output)
+    )
+    StructuralSupervisionCriterion(BaseCriterion(), context, config)(
+        None, make_batch(torch.tensor([[0.5, 0.5, 0.5, 0.5]]), torch.tensor([0]))
+    )
+    record = __import__("json").loads(output.read_text(encoding="utf-8"))
+    assert record["yolo_loss_raw"] == 2.0
+    assert record["fg_aux_loss_weighted"] == pytest.approx(record["fg_aux_loss_raw"] * 0.2)
+    assert record["aux_total_weighted"] == record["fg_aux_loss_weighted"]
+
+
+def test_loss_scale_diagnostic_can_record_p3_logit_gradient_norm(tmp_path):
+    context = StructuralSupervisionContext()
+    context.image = torch.rand(1, 3, 8, 8)
+    logits = torch.zeros((1, 1, 4, 4), requires_grad=True)
+    context.foreground_logits = logits
+    context.configure_diagnostics(
+        StructuralSupervisionConfig(
+            lambda_fg=0.2,
+            lambda_sp=0.0,
+            diagnostic_batches=1,
+            diagnostic_output_path=str(tmp_path / "gradient.jsonl"),
+            diagnostic_gradient_norms=True,
+        )
+    )
+    logits.register_hook(context.record_logit_gradient)
+    loss, _ = StructuralSupervisionCriterion(
+        BaseCriterion(), context, StructuralSupervisionConfig(lambda_fg=0.2, lambda_sp=0.0, diagnostic_batches=1)
+    )(None, make_batch(torch.tensor([[0.5, 0.5, 0.5, 0.5]]), torch.tensor([0])))
+    loss.backward()
+    records = [__import__("json").loads(line) for line in (tmp_path / "gradient.jsonl").read_text().splitlines()]
+    gradient = next(record for record in records if record["kind"] == "gradient")
+    assert gradient["p3_foreground_logits_gradient_l2"] > 0
 
 
 def test_patch_a_does_not_install_sp11_and_b_installs_head():

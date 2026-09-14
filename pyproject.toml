@@ -12,6 +12,7 @@ license = { file = "LICENSE" }
 authors = [{ name = "Artur" }]
 dependencies = [
     "numpy>=1.23",
+    "PyYAML>=6.0",
     "torch>=2.0",
 ]
 

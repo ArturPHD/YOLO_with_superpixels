@@ -34,4 +34,5 @@ third_party/SPiT/
 third_party/*
 !third_party/README.md
 /spit.zip
+/SPiT_Yolo.zip
 *.cache

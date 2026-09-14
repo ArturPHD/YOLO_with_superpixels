@@ -35,12 +35,22 @@ GT boxes at P3 resolution. The default `balanced_bce` gives foreground and
 background equal aggregate weight; plain BCE remains available.
 
 `L_region` is not superpixel-ID reconstruction. Let `p=sigmoid(logits)`. For a
-region `r`, it is the mean within-region variance:
+region `r`, its raw term is the within-region variance:
 
 `mean_r(mean_i_in_r((p_i - mean_r(p))^2))`
 
 Region IDs are only grouping labels, so the loss is invariant to a permutation
 of those identifiers.
+
+The default `balanced_fg_bg` policy computes separate means over active pure
+foreground regions and active pure background regions:
+
+`L_region = 0.5 * mean(V_fg) + 0.5 * mean(V_bg)`
+
+when both sets exist. If one set is empty, the available set is used. The
+diagnostic-only `all_regions_equal` mode averages every active region together.
+This policy is explicit in the resolved protocol and is not inferred from the
+data.
 
 ## Ambiguous-region protection
 
@@ -68,11 +78,17 @@ C and D request the same `n_segments=300`. The central scientific comparison is
 
 Training logs retain box, cls, and DFL losses and add:
 
-- `fg_aux_loss`
-- `sp_consistency_loss`
+- `fg_aux_loss_raw`, `fg_aux_loss_weighted`
+- `sp_consistency_loss_raw`, `sp_consistency_loss_weighted`
+- `aux_total_weighted`
 - requested/actual region counts
-- active pure and ignored ambiguous/small region counts
+- active foreground/background and ignored ambiguous/small region counts
 - mean and median region area
+- raw foreground/background region-variance means
+
+Ultralytics writes these training columns as its epoch-level means of batch
+items, not sums over an epoch. Validation bypasses SP-11 and therefore records
+zeros for the SP-11 fields while retaining a stable CSV schema.
 
 During eval, validation, prediction, export, and after explicit stripping, the
 P3 wrapper returns the ordinary YOLO feature and does not invoke the
@@ -80,6 +96,15 @@ foregroundness head, `torch_slic`, or `torch_grid`. Validation receives zero
 SP-11 fields so the loss schema stays stable.
 
 ## Reproducibility
+
+`configs/sp11/pilot_v1.yaml` is the single shared, versioned source of training
+settings. The four arm YAML files contain intervention-only overrides. Run
+`scripts/run_sp11_pilot.py --dry-run` before every pilot: it resolves the model
+and data-YAML files, calculates checkpoint/data identities, verifies any
+supplied expected checkpoint SHA-256, checks arm drift, and writes a
+machine-readable manifest with protocol SHA, shared-protocol SHA, arm-config
+SHA, resolved-config SHA, checkpoint SHA, and data-YAML SHA. It fails closed if
+an arm attempts to override a shared training setting.
 
 `auxiliary_init_seed` makes B/C/D foreground-head initialization deterministic
 without changing global RNG state. `base_model_path`, its automatic file hash,
@@ -90,6 +115,14 @@ source tree and package versions.
 For paired A/B/C/D runs, use the exact same base checkpoint, seed, training
 arguments, and base checkpoint hash.
 
+`--diagnostic-batches N` writes raw YOLO, raw/weighted foreground, raw/weighted
+region, and total weighted auxiliary scales for the first `N` training batches.
+It never alters lambda. `--diagnostic-gradient-norms` additionally records the
+P3 foreground-logit gradient L2 norm after backward. `--runtime-profile` is for
+a short smoke only: it synchronizes C/D label generation to measure structural
+preprocessing time. The normal launcher always writes wall time per epoch, peak
+VRAM when CUDA is used, and images/sec when Ultralytics exposes image counts.
+
 ## Tests and smoke status
 
 Unit coverage includes box rasterization, zero/overlapping/border boxes,
@@ -99,12 +132,12 @@ lambda-sp-zero behavior, train/eval separation, stripping, and criterion
 cleanup. `scripts/run_e2e_smoke.py --strategy structural` adds the same tiny
 train-save-reload-val-predict lifecycle route used by existing strategies.
 
-Current status: focused unit and real-model integration coverage passed on
-2026-09-14 (`92 passed, 1 skipped` after the base-checkpoint metadata and
-lifecycle-path regression tests). The real YOLO12n CPU lifecycle smoke also
-passed on 2026-09-14: one tiny synthetic-data epoch, checkpoint save, then
-fresh-process validation and prediction all completed successfully in 14.7 s.
-No long COCO SP-11 experiment has been launched.
+Current status: the protocol/diagnostic hardening pass passed on 2026-09-14:
+`python -m compileall` and `ruff check` passed; the full suite reported
+`107 passed, 1 skipped`; and the CUDA `torch_slic` repeatability smoke was
+bit-identical under PyTorch deterministic mode. The no-training A/B/C/D dry run
+resolved one checkpoint SHA and one data-YAML SHA across all arms. No long COCO
+SP-11 experiment has been launched.
 
 ## Known limitations
 

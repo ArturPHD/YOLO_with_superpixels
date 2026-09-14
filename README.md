@@ -988,6 +988,42 @@ $env:YOLO_SUPERPIXELS_E2E_REQUIRE_CUDA="1"
 .\.venv\Scripts\python.exe -m pytest tests\test_end_to_end_smoke.py -q
 ```
 
+## SP-11 Matched Pilot
+
+SP-11 is a separate train-only strategy: a P3 foregroundness head receives a
+box-derived target and can be regularized inside pure SLIC-like regions. It is
+not the historical right/down adjacency `auxiliary_loss` strategy.
+
+The A/B/C/D comparison is driven only by
+`configs/sp11/pilot_v1.yaml` plus intervention-only arm files in the same
+directory. Do not pass training-hyperparameter overrides on the command line.
+Set the dataset location once, inspect the frozen resolved configuration, and
+only then launch:
+
+```powershell
+$env:SP11_DATA_YAML = "F:\path\to\data.yaml"
+.\.venv\Scripts\python.exe scripts\run_sp11_pilot.py --dry-run
+```
+
+The dry run writes a manifest containing checkpoint SHA-256, data-YAML SHA-256,
+the common protocol SHA, and every arm SHA. A supplied checkpoint SHA in the
+protocol is verified; an unresolved dataset path or a training-field override
+inside an arm fails before any run begins.
+
+For a separately frozen short GPU smoke protocol, use the same launcher with:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_sp11_pilot.py `
+  --arm A B C D `
+  --diagnostic-batches 4 `
+  --diagnostic-gradient-norms `
+  --runtime-profile
+```
+
+This records wall time per epoch, peak VRAM, images/sec when available, and C/D
+structural-preprocessing time. It does not tune loss weights. The main pilot
+must keep `lambda_fg` and `lambda_sp` frozen after this diagnostic smoke.
+
 ## Visualizing Superpixel Methods
 
 Use `scripts/visualize_superpixel_methods.py` to compare superpixel methods on
