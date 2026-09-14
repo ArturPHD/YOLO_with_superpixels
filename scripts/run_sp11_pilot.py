@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -25,10 +26,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, default=None)
     parser.add_argument("--dry-run", action="store_true", help="Resolve and write the frozen manifest without training.")
     parser.add_argument(
+        "--loss-scale-diagnostic-batches",
         "--diagnostic-batches",
+        dest="diagnostic_batches",
         type=int,
         default=0,
-        help="Write raw/weighted loss-scale records for this many initial train batches; does not tune lambda.",
+        help="Write component loss/gradient records for initial batches; does not tune lambda.",
     )
     parser.add_argument(
         "--runtime-profile",
@@ -62,6 +65,8 @@ def _runtime_metrics(model: Any, elapsed_seconds: float, epochs: int, structural
         "peak_vram_bytes": None,
         "structural_preprocess_seconds": None,
         "structural_preprocess_calls": None,
+        "structural_consistency_seconds": None,
+        "structural_consistency_calls": None,
     }
     if torch.cuda.is_available() and getattr(device, "type", None) == "cuda":
         metrics["peak_vram_bytes"] = int(torch.cuda.max_memory_allocated(device))
@@ -71,6 +76,8 @@ def _runtime_metrics(model: Any, elapsed_seconds: float, epochs: int, structural
         if context is not None:
             metrics["structural_preprocess_seconds"] = context.structural_preprocess_seconds
             metrics["structural_preprocess_calls"] = context.structural_preprocess_calls
+            metrics["structural_consistency_seconds"] = context.structural_consistency_seconds
+            metrics["structural_consistency_calls"] = context.structural_consistency_calls
     return metrics
 
 
@@ -101,7 +108,7 @@ def _run_arm(
                 "auxiliary_init_seed": resolved["initialization"]["auxiliary_init_seed"],
                 "diagnostic_batches": diagnostic_batches,
                 "diagnostic_output_path": str(diagnostic_path) if diagnostic_batches else None,
-                "diagnostic_gradient_norms": diagnostic_gradient_norms,
+                "diagnostic_gradient_norms": diagnostic_gradient_norms or bool(diagnostic_batches),
                 "runtime_profile": runtime_profile or structural_values.get("runtime_profile", False),
             }
         )
@@ -128,12 +135,51 @@ def _run_arm(
         "runtime": runtime,
         "diagnostic_path": str(diagnostic_path) if diagnostic_batches else None,
     }
+    if diagnostic_batches:
+        summary = _summarize_diagnostic(diagnostic_path)
+        _write_json(save_dir / "loss_scale_diagnostic_summary.json", summary)
+        arm_record["diagnostic_summary_path"] = str(save_dir / "loss_scale_diagnostic_summary.json")
     _write_json(save_dir / "sp11_pilot_arm.json", arm_record)
     return arm_record
 
 
+def _summarize_diagnostic(path: Path) -> dict[str, Any]:
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    keys = (
+        "yolo_loss_raw", "fg_aux_loss_raw", "fg_aux_loss_weighted", "sp_consistency_loss_raw",
+        "sp_consistency_loss_weighted", "aux_total_weighted", "foreground_logit_gradient_norm_fg",
+        "foreground_logit_gradient_norm_sp", "foreground_logit_gradient_ratio_sp_over_fg",
+    )
+    return {
+        "kind": "sp11_loss_scale_diagnostic", "batches": len(records),
+        "medians": {key: statistics.median(values) if (values := [row[key] for row in records if row.get(key) is not None]) else None for key in keys},
+        "note": "Diagnostic-only; freeze lambda_fg and lambda_sp by human review before the scientific pilot.",
+    }
+
+
+def _print_comparison(resolved_arms) -> None:
+    first = resolved_arms[0]
+    training = first.resolved["training"]
+    print("SP-11 paired protocol")
+    print("arm strategy                 lambda_fg lambda_sp region      checkpoint    dataset       protocol     arm")
+    for arm in resolved_arms:
+        structural = arm.resolved.get("structural_supervision", {})
+        print(
+            f"{arm.arm:<3} {arm.resolved['strategy']:<24} {structural.get('lambda_fg', '-!s'):<9} "
+            f"{structural.get('lambda_sp', '-!s'):<9} {structural.get('region_algorithm', '-'):<11} "
+            f"{arm.base_checkpoint['sha256'][:12]} {arm.dataset_identity['sha256'][:12]} "
+            f"{arm.shared_protocol_sha256[:12]} {arm.arm_sha256[:12]}"
+        )
+    print(f"common: epochs={training['epochs']} patience={training['patience']} batch={training.get('batch')} seed={training.get('seed')}")
+
+
 def main() -> None:
-    from yolo_superpixels.strategies.structural_supervision.protocol import load_sp11_pilot, pilot_manifest
+    from yolo_superpixels.strategies.structural_supervision.protocol import (
+        load_sp11_pilot,
+        pilot_manifest,
+        torch_slic_repeatability_metadata,
+        write_dataset_identity_records,
+    )
 
     args = parse_args()
     if args.diagnostic_batches < 0:
@@ -142,11 +188,20 @@ def main() -> None:
     manifest = pilot_manifest(resolved_arms)
     manifest["selected_arms"] = list(args.arm)
     manifest["dry_run"] = bool(args.dry_run)
+    try:
+        manifest["torch_slic_cuda_repeatability"] = torch_slic_repeatability_metadata()
+    except Exception as error:
+        manifest["torch_slic_cuda_repeatability"] = {"error": str(error)}
     manifest_path = args.manifest.resolve() if args.manifest else (ROOT / "runs" / "sp11" / "sp11_pilot_manifest.json")
+    manifest["dataset_manifest_files"] = write_dataset_identity_records(
+        resolved_arms[0].dataset_identity, manifest_path.parent / "dataset_identity"
+    )
     _write_json(manifest_path, manifest)
+    _print_comparison(resolved_arms)
     print(json.dumps(manifest, indent=2, sort_keys=True))
     print(f"SP-11 manifest written to {manifest_path}")
     if args.dry_run:
+        print("PAIRED_PROTOCOL_CHECK: PASS")
         return
 
     results = []

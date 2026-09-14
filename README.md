@@ -994,9 +994,12 @@ SP-11 is a separate train-only strategy: a P3 foregroundness head receives a
 box-derived target and can be regularized inside pure SLIC-like regions. It is
 not the historical right/down adjacency `auxiliary_loss` strategy.
 
-The A/B/C/D comparison is driven only by
-`configs/sp11/pilot_v1.yaml` plus intervention-only arm files in the same
-directory. Do not pass training-hyperparameter overrides on the command line.
+`configs/sp11/pilot_v1.yaml` is a technical pretrained smoke only.
+`configs/sp11/scientific_paired_scratch_v1.yaml` is the scientific protocol:
+it creates one deterministic physical YOLOv12n scratch checkpoint from the
+tracked architecture YAML, then all A/B/C/D arms load that exact checkpoint.
+Both use the same intervention-only arm files. Do not pass training-
+hyperparameter overrides on the command line.
 Set the dataset location once, inspect the frozen resolved configuration, and
 only then launch:
 
@@ -1005,24 +1008,26 @@ $env:SP11_DATA_YAML = "F:\path\to\data.yaml"
 .\.venv\Scripts\python.exe scripts\run_sp11_pilot.py --dry-run
 ```
 
-The dry run writes a manifest containing checkpoint SHA-256, data-YAML SHA-256,
-the common protocol SHA, and every arm SHA. A supplied checkpoint SHA in the
-protocol is verified; an unresolved dataset path or a training-field override
-inside an arm fails before any run begins.
+The dry run writes a manifest containing checkpoint SHA-256, deterministic
+image/label dataset manifests and hashes, the common protocol SHA, and every
+arm SHA. It prints `PAIRED_PROTOCOL_CHECK: PASS` only after all invariants
+match. A supplied checkpoint SHA is verified; unresolved data or a
+training-field override inside an arm fails before any run begins.
 
 For a separately frozen short GPU smoke protocol, use the same launcher with:
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_sp11_pilot.py `
   --arm A B C D `
-  --diagnostic-batches 4 `
-  --diagnostic-gradient-norms `
+  --loss-scale-diagnostic-batches 4 `
   --runtime-profile
 ```
 
 This records wall time per epoch, peak VRAM, images/sec when available, and C/D
-structural-preprocessing time. It does not tune loss weights. The main pilot
-must keep `lambda_fg` and `lambda_sp` frozen after this diagnostic smoke.
+structural-preprocessing/consistency time. It records separate foreground and
+region gradient norms into the P3 foreground logits and does not tune loss
+weights. The main pilot must keep `lambda_fg` and `lambda_sp` frozen after
+human review of this diagnostic smoke.
 
 ## Visualizing Superpixel Methods
 

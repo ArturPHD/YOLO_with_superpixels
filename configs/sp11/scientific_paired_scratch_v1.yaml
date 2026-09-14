@@ -1,0 +1,63 @@
+# Frozen scientific SP-11 protocol. It deliberately cannot run until the
+# audited low-data manifest path and its provenance are supplied by the caller.
+protocol: sp11_pilot_v1
+shared:
+  initialization:
+    mode: scientific_paired_scratch
+    source_model_yaml: configs/sp11/yolov12n.yaml
+    base_model_path: initializations/sp11_yolo12n_scratch_seed0.pt
+    base_model_sha256: 1404a7d7b1e185e2aaf7f089588c7fe9f156c643ffd1e6a8db1c2c659254c5f1
+    base_initialization_seed: 0
+    auxiliary_init_seed: 0
+    create_if_missing: true
+  scientific_subset:
+    provenance: "${SP11_LOW_DATA_PROVENANCE}"
+    # COCO train2017 contains 118287 images. The frozen manifest determines the actual fraction.
+    base_train_image_count: 118287
+    expected_fraction: 0.10
+    fraction_tolerance: 0.01
+  training:
+    data: "${SP11_SCIENTIFIC_DATA_YAML}"
+    imgsz: 640
+    epochs: 150
+    batch: 32
+    workers: 8
+    device: "0"
+    seed: 0
+    deterministic: true
+    optimizer: SGD
+    lr0: 0.01
+    lrf: 0.01
+    momentum: 0.937
+    weight_decay: 0.0005
+    warmup_epochs: 3.0
+    warmup_momentum: 0.8
+    warmup_bias_lr: 0.1
+    patience: 0
+    close_mosaic: 10
+    hsv_h: 0.015
+    hsv_s: 0.7
+    hsv_v: 0.4
+    degrees: 0.0
+    translate: 0.1
+    scale: 0.5
+    shear: 0.0
+    perspective: 0.0
+    flipud: 0.0
+    fliplr: 0.5
+    mosaic: 1.0
+    mixup: 0.0
+    copy_paste: 0.0
+    amp: true
+    project: runs/sp11_scientific
+  structural_supervision:
+    # Freeze these only after a loss-scale diagnostic; all B/C/D share lambda_fg.
+    lambda_fg: 0.05
+    foreground_loss_type: balanced_bce
+    scale_by_batch: true
+    head_init: tiny
+    purity_threshold: 0.9
+    min_region_size: 4
+    region_balance_policy: balanced_fg_bg
+    diagnostic_gradient_norms: false
+    runtime_profile: false

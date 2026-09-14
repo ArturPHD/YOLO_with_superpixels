@@ -1,7 +1,8 @@
 protocol: sp11_pilot_v1
 shared:
   initialization:
-    # The launcher resolves and records the actual file SHA-256 before training.
+    # Technical lifecycle/GPU smoke only; never use this config for scarcity claims.
+    mode: technical_pretrained_smoke
     base_model_path: yolo12n.pt
     base_model_sha256: null
     auxiliary_init_seed: 0
@@ -23,7 +24,9 @@ shared:
     warmup_epochs: 3.0
     warmup_momentum: 0.8
     warmup_bias_lr: 0.1
-    patience: 100
+    # Ultralytics 8.4.112 maps patience=0 to infinity: fixed-horizon, no early stop.
+    patience: 0
+    close_mosaic: 10
     hsv_h: 0.015
     hsv_s: 0.7
     hsv_v: 0.4

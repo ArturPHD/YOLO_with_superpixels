@@ -17,6 +17,7 @@ weights/
 wandb/
 events.out.tfevents*
 *.pt
+initializations/
 *.pth
 *.ckpt
 *.onnx

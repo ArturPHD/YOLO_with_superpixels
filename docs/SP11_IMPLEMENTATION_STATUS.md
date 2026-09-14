@@ -1,5 +1,59 @@
 # SP-11 Implementation Status
 
+## Readiness states
+
+| State | Status | Meaning |
+|---|---|---|
+| Architecture implemented | complete | Frozen P3 / `Detect.f[0]` foreground branch and train-only structural terms exist. |
+| Unit tested | complete | Protocol, targets, losses, pairing, dataset fingerprints and lifecycle unit tests run in CI/local pytest. |
+| CPU lifecycle tested | complete | Existing small structural lifecycle coverage saves, reloads, validates and predicts without SP-11 inference work. |
+| GPU technical smoke | prepared, not run in this pass | Execute the 1-2 epoch A/B/C/D command below; it may use pretrained `yolo12n.pt` only as a technical check. |
+| Loss-scale diagnostic | prepared, not run | Inspect diagnostic medians manually and freeze lambdas before the scientific pilot. |
+| Paired scratch checkpoint created | prepared | Created automatically once by the scientific protocol at `initializations/sp11_yolo12n_scratch_seed0.pt`; it is ignored runtime output, not a repository artifact. |
+| Scientific dataset frozen | blocked | Requires the audited low-data manifest path and provenance through `SP11_SCIENTIFIC_DATA_YAML` and `SP11_LOW_DATA_PROVENANCE`. |
+| Scientific pilot ready | conditional | Ready only after the dataset identity dry-run, fixed lambdas and tiny GPU smoke pass. |
+| Scientific pilot run | not run | Do not make scientific claims yet. |
+| Multi-seed confirmation | not started | Consider only after a meaningful one-seed result. |
+
+## Initialization modes
+
+`configs/sp11/pilot_v1.yaml` is `technical_pretrained_smoke`: it may use
+`yolo12n.pt` only for CUDA/lifecycle/runtime checks, never for a low-data
+scientific conclusion. `configs/sp11/scientific_paired_scratch_v1.yaml` is
+`scientific_paired_scratch`: it creates a single physical checkpoint from the
+tracked `configs/sp11/yolov12n.yaml` under an isolated seed, records its SHA,
+parameter count and source metadata, then makes every A/B/C/D arm load that
+same file. It does not instantiate one fresh model per arm.
+
+Current pinned Ultralytics behavior is explicitly tested: `EarlyStopping(patience=0)`
+stores infinite patience, so `patience: 0` provides the fixed-horizon policy for
+the installed version. The protocol rejects any other patience value.
+
+## Commands
+
+Technical 2-epoch GPU smoke, including component loss-scale measurements:
+
+```powershell
+$env:SP11_DATA_YAML = "F:\path\to\technical_smoke_data.yaml"
+python scripts\run_sp11_pilot.py --protocol configs\sp11\pilot_v1.yaml --arm A B C D --loss-scale-diagnostic-batches 20 --runtime-profile
+```
+
+Scientific paired-scratch dry run (does not train). `SP11_SCIENTIFIC_DATA_YAML`
+must point to one immutable low-data data YAML whose train source is the frozen
+manifest; the provenance describes where that manifest came from.
+
+```powershell
+$env:SP11_SCIENTIFIC_DATA_YAML = "F:\path\to\audited_coco10\data.yaml"
+$env:SP11_LOW_DATA_PROVENANCE = "Paper-B COCO train2017 seed=... manifest SHA=..."
+python scripts\run_sp11_pilot.py --protocol configs\sp11\scientific_paired_scratch_v1.yaml --arm A B C D --dry-run
+```
+
+Only after that dry run reports `PAIRED_PROTOCOL_CHECK: PASS`, the researcher
+reviews a diagnostic, freezes `lambda_fg` and `lambda_sp` in the shared
+scientific YAML, and runs the same command without `--dry-run`. The launcher
+writes image and label manifests, hashes, class/object statistics, a pilot
+manifest and per-arm runtime telemetry. No command here launches automatically.
+
 ## Scope
 
 SP-11 is a new, train-only strategy. It is intentionally separate from the
@@ -116,12 +170,14 @@ For paired A/B/C/D runs, use the exact same base checkpoint, seed, training
 arguments, and base checkpoint hash.
 
 `--diagnostic-batches N` writes raw YOLO, raw/weighted foreground, raw/weighted
-region, and total weighted auxiliary scales for the first `N` training batches.
-It never alters lambda. `--diagnostic-gradient-norms` additionally records the
-P3 foreground-logit gradient L2 norm after backward. `--runtime-profile` is for
-a short smoke only: it synchronizes C/D label generation to measure structural
-preprocessing time. The normal launcher always writes wall time per epoch, peak
-VRAM when CUDA is used, and images/sec when Ultralytics exposes image counts.
+region, total weighted auxiliary scales and the component-specific P3-logit
+norms `||grad_z(lambda_fg L_fg)||` and `||grad_z(lambda_sp L_sp)||` for the
+first `N` batches. It writes their ratio and a median summary, but never alters
+lambda. `--loss-scale-diagnostic-batches` is the preferred name; the old flag
+remains an alias. `--runtime-profile` is for a short smoke only: it synchronizes
+C/D label generation and consistency loss to measure their separate costs. The
+normal launcher always writes wall time per epoch, peak VRAM when CUDA is used,
+and images/sec when Ultralytics exposes image counts.
 
 ## Tests and smoke status
 

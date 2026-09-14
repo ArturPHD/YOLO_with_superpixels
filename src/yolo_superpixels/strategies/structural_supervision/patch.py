@@ -114,6 +114,8 @@ class StructuralSupervisionContext:
         self.diagnostic_output_path: str | None = None
         self.structural_preprocess_seconds = 0.0
         self.structural_preprocess_calls = 0
+        self.structural_consistency_seconds = 0.0
+        self.structural_consistency_calls = 0
 
     def set_image(self, image: torch.Tensor) -> None:
         self.image = image[:, :3]
@@ -390,6 +392,7 @@ class StructuralSupervisionCriterion:
             zero = _zero_scalar(loss_items)
             fg_raw, sp_raw = zero, zero
             fg_weighted, sp_weighted = zero, zero
+            fg_term, sp_term = zero, zero
             stats: dict[str, Any] = _empty_region_stats()
             logits, image = self.context.foreground_logits, self.context.image
             base_loss = loss
@@ -401,7 +404,8 @@ class StructuralSupervisionCriterion:
                 self.context.last_fg_loss = float(fg_loss.detach().float().cpu())
                 if self.config.lambda_fg > 0:
                     fg_weighted = fg_loss.detach() * (scale * self.config.lambda_fg)
-                    loss = loss + scale * self.config.lambda_fg * fg_loss
+                    fg_term = scale * self.config.lambda_fg * fg_loss
+                    loss = loss + fg_term
                 if self.config.lambda_sp > 0:
                     if image is None:
                         if self.config.fail_without_image:
@@ -409,12 +413,20 @@ class StructuralSupervisionCriterion:
                     else:
                         assert self.region_algorithm is not None
                         labels = self._labels_on_feature_grid(image, logits)
+                        if self.config.runtime_profile and logits.device.type == "cuda":
+                            torch.cuda.synchronize(logits.device)
+                        started = time.perf_counter()
                         sp_loss, stats = region_consistency_loss(
                             torch.sigmoid(logits.float()), labels, target,
                             purity_threshold=self.config.purity_threshold,
                             min_region_size=self.config.min_region_size,
                             balance_policy=self.config.region_balance_policy,
                         )
+                        if self.config.runtime_profile:
+                            if logits.device.type == "cuda":
+                                torch.cuda.synchronize(logits.device)
+                            self.context.structural_consistency_seconds += time.perf_counter() - started
+                            self.context.structural_consistency_calls += 1
                         stats["requested_regions"] = float(
                             (self.config.requested_n_segments or 0) * logits.shape[0]
                         )
@@ -422,14 +434,17 @@ class StructuralSupervisionCriterion:
                         self.context.last_region_stats = stats
                         sp_raw = sp_loss.detach()
                         sp_weighted = sp_loss.detach() * (scale * self.config.lambda_sp)
-                        loss = loss + scale * self.config.lambda_sp * sp_loss
+                        sp_term = scale * self.config.lambda_sp * sp_loss
+                        loss = loss + sp_term
             else:
                 self.context.last_fg_loss, self.context.last_sp_loss = None, None
                 self.context.last_region_stats = _finalize_region_stats(stats)
             final_stats = _finalize_region_stats(stats)
             self.context.last_region_stats = final_stats
             aux_total = fg_weighted + sp_weighted
-            self._record_diagnostic(base_loss, fg_raw, fg_weighted, sp_raw, sp_weighted, aux_total)
+            self._record_diagnostic(
+                base_loss, fg_raw, fg_weighted, sp_raw, sp_weighted, aux_total, logits, fg_term, sp_term
+            )
             return loss, _append_items(loss_items, fg_raw, fg_weighted, sp_raw, sp_weighted, aux_total, final_stats)
         finally:
             self.context.clear_runtime_tensors()
@@ -462,6 +477,9 @@ class StructuralSupervisionCriterion:
         sp_raw: torch.Tensor,
         sp_weighted: torch.Tensor,
         aux_total: torch.Tensor,
+        logits: torch.Tensor | None,
+        fg_term: torch.Tensor,
+        sp_term: torch.Tensor,
     ) -> None:
         if self.context.diagnostic_count >= self.config.diagnostic_batches:
             return
@@ -473,8 +491,17 @@ class StructuralSupervisionCriterion:
             "sp_consistency_loss_raw": float(sp_raw.detach().float().cpu()),
             "sp_consistency_loss_weighted": float(sp_weighted.detach().float().cpu()),
             "aux_total_weighted": float(aux_total.detach().float().cpu()),
-            "gradient_norms": None,
+            "foreground_logit_gradient_norm_fg": None,
+            "foreground_logit_gradient_norm_sp": None,
+            "foreground_logit_gradient_ratio_sp_over_fg": None,
         }
+        if self.config.diagnostic_gradient_norms and logits is not None:
+            fg_norm = _gradient_l2(fg_term, logits)
+            sp_norm = _gradient_l2(sp_term, logits)
+            record["foreground_logit_gradient_norm_fg"] = fg_norm
+            record["foreground_logit_gradient_norm_sp"] = sp_norm
+            if fg_norm and sp_norm is not None:
+                record["foreground_logit_gradient_ratio_sp_over_fg"] = sp_norm / fg_norm
         self.context.diagnostic_count += 1
         if self.config.diagnostic_output_path:
             output = Path(self.config.diagnostic_output_path)
@@ -553,6 +580,15 @@ def _append_items(
 def _batch_scale(batch: dict[str, Any], enabled: bool) -> int:
     image = batch.get("img")
     return int(image.shape[0]) if enabled and isinstance(image, torch.Tensor) else 1
+
+
+def _gradient_l2(term: torch.Tensor, logits: torch.Tensor) -> float | None:
+    """Diagnostic-only component gradient norm without populating parameter grads."""
+
+    if not term.requires_grad or not logits.requires_grad:
+        return None
+    gradient = torch.autograd.grad(term, logits, retain_graph=True, allow_unused=True)[0]
+    return float(gradient.detach().float().norm().cpu()) if gradient is not None else None
 
 
 def _module_list(model: nn.Module) -> nn.ModuleList | nn.Sequential:

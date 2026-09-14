@@ -321,6 +321,32 @@ def test_loss_scale_diagnostic_can_record_p3_logit_gradient_norm(tmp_path):
     assert gradient["p3_foreground_logits_gradient_l2"] > 0
 
 
+def test_loss_scale_diagnostic_records_component_specific_gradient_norms(tmp_path):
+    context = StructuralSupervisionContext()
+    context.image = torch.rand(1, 3, 8, 8)
+    context.foreground_logits = torch.randn((1, 1, 4, 4), requires_grad=True)
+    output = tmp_path / "components.jsonl"
+    config = StructuralSupervisionConfig(
+        lambda_fg=0.2,
+        lambda_sp=0.2,
+        region_algorithm="torch_grid",
+        region_kwargs={"n_segments": 4},
+        min_region_size=1,
+        scale_by_batch=False,
+        diagnostic_batches=1,
+        diagnostic_gradient_norms=True,
+        diagnostic_output_path=str(output),
+    )
+    loss, _ = StructuralSupervisionCriterion(BaseCriterion(), context, config)(
+        None, make_batch(torch.tensor([[0.5, 0.5, 0.5, 0.5]]), torch.tensor([0]))
+    )
+    loss.backward()
+    record = __import__("json").loads(output.read_text(encoding="utf-8"))
+    assert record["foreground_logit_gradient_norm_fg"] > 0
+    assert record["foreground_logit_gradient_norm_sp"] is not None
+    assert record["foreground_logit_gradient_ratio_sp_over_fg"] is not None
+
+
 def test_patch_a_does_not_install_sp11_and_b_installs_head():
     arm_a = TinyYOLOLike()
     assert not any(isinstance(module, StructuralSupervisionWrapper) for module in arm_a.modules())
@@ -333,6 +359,28 @@ def test_patch_a_does_not_install_sp11_and_b_installs_head():
 def test_arm_c_and_d_select_expected_label_algorithms():
     assert isinstance(StructuralSupervisionConfig(region_algorithm="torch_slic").build_region_algorithm(), TorchSLICSuperpixelAlgorithm)
     assert isinstance(StructuralSupervisionConfig(region_algorithm="torch_grid", region_kwargs={"n_segments": 300}).build_region_algorithm(), TorchGridSuperpixelAlgorithm)
+
+
+def test_auxiliary_install_preserves_base_tensors_and_matches_b_c_d_head_initialization():
+    torch.manual_seed(123)
+    base = TinyYOLOLike()
+    before = {key: value.detach().clone() for key, value in base.state_dict().items()}
+    heads = []
+    for algorithm, lambda_sp in (("torch_grid", 0.0), ("torch_slic", 0.05), ("torch_grid", 0.05)):
+        candidate = deepcopy(base)
+        result = patch_structural_supervision(
+            candidate,
+            StructuralSupervisionConfig(region_algorithm=algorithm, lambda_sp=lambda_sp, auxiliary_init_seed=17),
+            install_criterion=False,
+        )
+        wrapper = candidate.model[result.target_layer]
+        assert isinstance(wrapper, StructuralSupervisionWrapper)
+        for key, value in wrapper.module.state_dict().items():
+            torch.testing.assert_close(value, before[f"model.{result.target_layer}.{key}"])
+        heads.append(wrapper.head.state_dict())
+    for key in heads[0]:
+        torch.testing.assert_close(heads[0][key], heads[1][key])
+        torch.testing.assert_close(heads[0][key], heads[2][key])
 
 
 def test_eval_does_not_run_head_or_generate_regions():
