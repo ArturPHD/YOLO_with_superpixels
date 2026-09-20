@@ -8,6 +8,16 @@ import torch.nn as nn
 from .tokens import SPiTTokenProvider, TokenBundle, tokens_to_dense_map
 
 
+TOKEN_ABLATION_MODES = {
+    "normal",
+    "zero",
+    "constant",
+    "batch_shuffle",
+    "spatial_shuffle",
+    "random_matched",
+}
+
+
 def _gate_value(init: str) -> float:
     if init == "zero":
         return 0.0
@@ -59,6 +69,71 @@ class SuperpixelNeckFusion(nn.Module):
         self.cross_attention: nn.MultiheadAttention | None = None
         self.initialized_channels: int | None = None
         self.initialized_token_dim: int | None = None
+        self.token_ablation = "normal"
+        self.token_ablation_seed = 0
+        self._token_ablation_calls = 0
+        self._diagnostics_enabled = False
+        self._diagnostics_max_queries = 256
+        self._diagnostics_max_forwards = 0
+        self._collect_diagnostics_this_forward = False
+        self._diagnostic_records: list[dict[str, float]] = []
+        self._last_attention_statistics: dict[str, float] = {}
+
+    def _ensure_runtime_state(self) -> None:
+        """Hydrate non-parameter fields absent from checkpoints saved by older code."""
+
+        defaults: dict[str, object] = {
+            "token_ablation": "normal",
+            "token_ablation_seed": 0,
+            "_token_ablation_calls": 0,
+            "_diagnostics_enabled": False,
+            "_diagnostics_max_queries": 256,
+            "_diagnostics_max_forwards": 0,
+            "_collect_diagnostics_this_forward": False,
+            "_diagnostic_records": [],
+            "_last_attention_statistics": {},
+        }
+        for name, value in defaults.items():
+            if not hasattr(self, name):
+                setattr(self, name, value.copy() if isinstance(value, dict) else list(value) if isinstance(value, list) else value)
+
+    def set_token_ablation(self, mode: str = "normal", seed: int = 0) -> None:
+        """Set a validation-time token perturbation without altering fusion weights."""
+
+        self._ensure_runtime_state()
+        if mode not in TOKEN_ABLATION_MODES:
+            raise ValueError(f"token ablation must be one of {sorted(TOKEN_ABLATION_MODES)}.")
+        self.token_ablation = mode
+        self.token_ablation_seed = int(seed)
+        self._token_ablation_calls = 0
+
+    def set_feature_diagnostics(
+        self,
+        enabled: bool,
+        max_queries: int = 256,
+        max_forwards: int = 0,
+    ) -> None:
+        """Enable bounded diagnostic summaries for validation-only analysis."""
+
+        self._ensure_runtime_state()
+        self._diagnostics_enabled = bool(enabled)
+        self._diagnostics_max_queries = max(1, int(max_queries))
+        self._diagnostics_max_forwards = max(0, int(max_forwards))
+        self._collect_diagnostics_this_forward = False
+        self._diagnostic_records.clear()
+
+    def diagnostic_summary(self) -> dict[str, float]:
+        """Return per-forward mean diagnostics collected while enabled."""
+
+        self._ensure_runtime_state()
+        if not self._diagnostic_records:
+            return {}
+        keys = sorted({key for record in self._diagnostic_records for key in record})
+        return {
+            key: sum(record[key] for record in self._diagnostic_records if key in record)
+            / sum(1 for record in self._diagnostic_records if key in record)
+            for key in keys
+        }
 
     def initialize(
         self,
@@ -112,18 +187,128 @@ class SuperpixelNeckFusion(nn.Module):
         if yolo_feature.ndim != 4:
             raise ValueError(f"Expected BCHW YOLO feature, got shape {tuple(yolo_feature.shape)}.")
 
+        self._ensure_runtime_state()
+        self._collect_diagnostics_this_forward = self._diagnostics_enabled and (
+            self._diagnostics_max_forwards == 0
+            or len(self._diagnostic_records) < self._diagnostics_max_forwards
+        )
         bundle = self.token_provider(rgb)
+        raw_token_rms = self._valid_token_rms(bundle) if self._collect_diagnostics_this_forward else None
+        bundle = self._apply_token_ablation(bundle)
         if self.mode == "cross_attention":
-            return self._forward_cross_attention(yolo_feature, bundle)
+            output = self._forward_cross_attention(yolo_feature, bundle)
+            self._record_diagnostics(yolo_feature, bundle, output, raw_token_rms)
+            return output
 
         dense_tokens = tokens_to_dense_map(bundle, output_size=tuple(yolo_feature.shape[-2:]))
         dense_tokens = dense_tokens.to(device=yolo_feature.device, dtype=yolo_feature.dtype)
         projected = self._project_dense(dense_tokens, out_channels=int(yolo_feature.shape[1]))
 
         if self.mode == "add":
-            return yolo_feature + self.gamma.to(dtype=yolo_feature.dtype) * projected
+            output = yolo_feature + self.gamma.to(dtype=yolo_feature.dtype) * projected
+            self._record_diagnostics(yolo_feature, bundle, output, raw_token_rms)
+            return output
 
-        return self._forward_concat(yolo_feature, projected)
+        output = self._forward_concat(yolo_feature, projected)
+        self._record_diagnostics(yolo_feature, bundle, output, raw_token_rms)
+        return output
+
+    def _apply_token_ablation(self, bundle: TokenBundle) -> TokenBundle:
+        """Perturb non-CLS token values while keeping tensor device and padding valid."""
+
+        if self.token_ablation == "normal":
+            return bundle
+
+        if self.token_ablation == "batch_shuffle" and self.mode != "cross_attention":
+            raise ValueError("batch_shuffle is defined only for cross_attention fusion.")
+
+        tokens = bundle.tokens.clone()
+        valid = bundle.valid_mask
+        region_valid = valid.clone()
+        region_valid[:, 0] = False
+        generator = torch.Generator(device=tokens.device)
+        generator.manual_seed(self.token_ablation_seed + self._token_ablation_calls)
+        self._token_ablation_calls += 1
+
+        if self.token_ablation == "zero":
+            tokens = tokens.masked_fill(region_valid.unsqueeze(-1), 0.0)
+        elif self.token_ablation == "constant":
+            for batch_index in range(tokens.shape[0]):
+                indices = region_valid[batch_index].nonzero(as_tuple=False).flatten()
+                if indices.numel() > 0:
+                    mean = tokens[batch_index, indices].mean(dim=0, keepdim=True)
+                    tokens[batch_index, indices] = mean
+        elif self.token_ablation == "batch_shuffle":
+            if tokens.shape[0] > 1:
+                # A deterministic cyclic shift guarantees that every image receives
+                # another image's tokens without a device-to-host identity check.
+                permutation = torch.roll(torch.arange(tokens.shape[0], device=tokens.device), shifts=1)
+                tokens = tokens[permutation]
+                valid = valid[permutation]
+            else:
+                tokens = self._spatially_shuffle_tokens(tokens, region_valid, generator)
+        elif self.token_ablation == "spatial_shuffle":
+            tokens = self._spatially_shuffle_tokens(tokens, region_valid, generator)
+        elif self.token_ablation == "random_matched":
+            for batch_index in range(tokens.shape[0]):
+                indices = region_valid[batch_index].nonzero(as_tuple=False).flatten()
+                if indices.numel() > 0:
+                    values = tokens[batch_index, indices]
+                    mean = values.mean(dim=0, keepdim=True)
+                    std = values.std(dim=0, unbiased=False, keepdim=True).clamp_min(1e-6)
+                    tokens[batch_index, indices] = torch.randn(
+                        values.shape,
+                        device=tokens.device,
+                        dtype=tokens.dtype,
+                        generator=generator,
+                    ) * std + mean
+
+        return TokenBundle(tokens=tokens, valid_mask=valid, labels=bundle.labels)
+
+    @staticmethod
+    def _spatially_shuffle_tokens(
+        tokens: torch.Tensor,
+        region_valid: torch.Tensor,
+        generator: torch.Generator,
+    ) -> torch.Tensor:
+        output = tokens.clone()
+        for batch_index in range(tokens.shape[0]):
+            indices = region_valid[batch_index].nonzero(as_tuple=False).flatten()
+            if indices.numel() > 1:
+                permutation = torch.randperm(indices.numel(), device=tokens.device, generator=generator)
+                output[batch_index, indices] = tokens[batch_index, indices[permutation]]
+        return output
+
+    @staticmethod
+    def _valid_token_rms(bundle: TokenBundle) -> float:
+        valid = bundle.valid_mask.clone()
+        valid[:, 0] = False
+        values = bundle.tokens[valid]
+        if values.numel() == 0:
+            return 0.0
+        return float(values.detach().float().square().mean().sqrt().cpu())
+
+    def _record_diagnostics(
+        self,
+        yolo_feature: torch.Tensor,
+        bundle: TokenBundle,
+        output: torch.Tensor,
+        raw_token_rms: float | None,
+    ) -> None:
+        if not self._collect_diagnostics_this_forward:
+            return
+        feature_rms = float(yolo_feature.detach().float().square().mean().sqrt().cpu())
+        delta_rms = float((output - yolo_feature).detach().float().square().mean().sqrt().cpu())
+        record = {
+            "yolo_feature_rms": feature_rms,
+            "token_rms_raw": raw_token_rms if raw_token_rms is not None else self._valid_token_rms(bundle),
+            "token_rms_effective": self._valid_token_rms(bundle),
+            "fusion_delta_rms": delta_rms,
+            "delta_to_yolo_rms": delta_rms / max(feature_rms, 1e-12),
+            "fusion_gamma": float(self.gamma.detach().float().cpu()),
+        }
+        record.update(self._last_attention_statistics)
+        self._diagnostic_records.append(record)
 
     def _project_dense(self, dense_tokens: torch.Tensor, out_channels: int) -> torch.Tensor:
         in_channels = int(dense_tokens.shape[1])
@@ -180,5 +365,25 @@ class SuperpixelNeckFusion(nn.Module):
             key_padding_mask=~valid,
             need_weights=False,
         )
+        self._last_attention_statistics = {}
+        if self._collect_diagnostics_this_forward:
+            query_step = max(1, query.shape[1] // self._diagnostics_max_queries)
+            sampled_query = query[:, ::query_step]
+            _, weights = self.cross_attention(
+                query=sampled_query,
+                key=key_value,
+                value=key_value,
+                key_padding_mask=~valid,
+                need_weights=True,
+                average_attn_weights=False,
+            )
+            probabilities = weights.detach().float().clamp_min(1e-12)
+            entropy = -(probabilities * probabilities.log()).sum(dim=-1).mean()
+            self._last_attention_statistics = {
+                "attention_query_rms": float(sampled_query.detach().float().square().mean().sqrt().cpu()),
+                "attention_key_rms": float(key_value.detach().float().square().mean().sqrt().cpu()),
+                "attention_entropy": float(entropy.cpu()),
+                "attention_effective_tokens": float(entropy.exp().cpu()),
+            }
         attention_map = attention_out.transpose(1, 2).reshape(batch, channels, height, width)
         return yolo_feature + self.gamma.to(dtype=yolo_feature.dtype) * attention_map

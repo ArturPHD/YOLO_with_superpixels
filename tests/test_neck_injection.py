@@ -9,6 +9,7 @@ from yolo_superpixels.strategies.neck_injection import (
     patch_neck_injection,
     tokens_to_dense_map,
 )
+from yolo_superpixels.strategies.neck_injection.fusion import SuperpixelNeckFusion
 from yolo_superpixels.strategies.neck_injection.tokens import _compatible_state_dict
 
 
@@ -114,6 +115,51 @@ def test_patch_neck_injection_can_disable_injection():
     output = model(torch.rand(1, 3, 6, 6))
 
     assert output.shape == (1, 4, 6, 6)
+
+
+def test_token_ablation_controls_preserve_padding_and_change_only_region_tokens():
+    provider = FakeTokenProvider(token_dim=4)
+    fusion = SuperpixelNeckFusion(provider, mode="cross_attention", gate_init="one", attention_heads=2)
+    bundle = provider(torch.rand(2, 3, 6, 6))
+    bundle.valid_mask[1, 2] = False
+
+    fusion.set_token_ablation("zero")
+    zeroed = fusion._apply_token_ablation(bundle)
+    torch.testing.assert_close(zeroed.tokens[:, 0], bundle.tokens[:, 0])
+    assert torch.count_nonzero(zeroed.tokens[:, 1:][bundle.valid_mask[:, 1:]]) == 0
+    torch.testing.assert_close(zeroed.tokens[:, 1:][~bundle.valid_mask[:, 1:]], bundle.tokens[:, 1:][~bundle.valid_mask[:, 1:]])
+
+    fusion.set_token_ablation("constant")
+    constant = fusion._apply_token_ablation(bundle)
+    torch.testing.assert_close(constant.tokens[0, 1], constant.tokens[0, 2])
+
+    fusion.set_token_ablation("spatial_shuffle", seed=3)
+    spatial = fusion._apply_token_ablation(bundle)
+    assert sorted(spatial.tokens[0, 1:, 0].tolist()) == sorted(bundle.tokens[0, 1:, 0].tolist())
+
+    fusion.set_token_ablation("batch_shuffle")
+    shuffled = fusion._apply_token_ablation(bundle)
+    torch.testing.assert_close(shuffled.tokens[0], bundle.tokens[1])
+    torch.testing.assert_close(shuffled.valid_mask[0], bundle.valid_mask[1])
+
+
+def test_cross_attention_feature_diagnostics_are_bounded():
+    provider = FakeTokenProvider(token_dim=4)
+    fusion = SuperpixelNeckFusion(provider, mode="cross_attention", gate_init="tiny", attention_heads=2)
+    fusion.initialize(yolo_channels=4, token_dim=4)
+    fusion.set_feature_diagnostics(True, max_queries=3, max_forwards=2)
+
+    for _ in range(3):
+        output = fusion(torch.rand(2, 4, 4, 4), torch.rand(2, 3, 8, 8))
+        assert output.shape == (2, 4, 4, 4)
+
+    summary = fusion.diagnostic_summary()
+    assert len(fusion._diagnostic_records) == 2
+    assert summary["yolo_feature_rms"] > 0
+    assert summary["token_rms_raw"] > 0
+    assert summary["fusion_delta_rms"] >= 0
+    assert summary["delta_to_yolo_rms"] >= 0
+    assert summary["attention_effective_tokens"] >= 1
 
 
 def _fake_spit_provider():

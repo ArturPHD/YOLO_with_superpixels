@@ -52,6 +52,11 @@ class NeckInjectionConfig:
     spit_label_lambda_grad: float = 27.8
     spit_label_lambda_col: float = 10.0
     spit_label_maxlvl: int = 4
+    token_ablation: str = "normal"
+    token_ablation_seed: int = 0
+    feature_diagnostics: bool = False
+    feature_diagnostics_max_queries: int = 256
+    feature_diagnostics_max_forwards: int = 0
     validate_target: bool = True
     validation_imgsz: int = 64
 
@@ -388,25 +393,35 @@ def patch_neck_injection(
     layers = _module_list(model)
     target_layer, detect_layer, detect_sources = find_neck_injection_target(model, config.target_layer)
     target_module = layers[target_layer]
-    target_stride, target_shape = (
-        validate_neck_injection_target(model, target_layer, detect_sources, config.validation_imgsz)
-        if config.validate_target
-        else (None, None)
-    )
 
     if isinstance(target_module, NeckInjectionWrapper):
+        # Historical full-SPiT checkpoints already contain the verified wrapper.
+        # Re-validating it here would execute its CuPy tokenizer on a CPU dummy
+        # tensor before Ultralytics moves the model to the requested device.
         target_module.enabled = config.enabled
         target_module.fail_without_image = config.fail_without_image
+        target_module.fusion.set_token_ablation(config.token_ablation, config.token_ablation_seed)
+        target_module.fusion.set_feature_diagnostics(
+            config.feature_diagnostics,
+            config.feature_diagnostics_max_queries,
+            config.feature_diagnostics_max_forwards,
+        )
         _install_input_capture_hook(model, target_module)
         return NeckInjectionPatchResult(
             target_layer=target_layer,
             target_module=target_module.module.__class__.__name__,
             detect_layer=detect_layer,
             detect_sources=detect_sources,
-            target_stride=target_stride,
-            target_shape=target_shape,
+            target_stride=None,
+            target_shape=None,
             already_patched=True,
         )
+
+    target_stride, target_shape = (
+        validate_neck_injection_target(model, target_layer, detect_sources, config.validation_imgsz)
+        if config.validate_target
+        else (None, None)
+    )
 
     token_provider = token_provider or config.build_token_provider()
     fusion = SuperpixelNeckFusion(
@@ -415,6 +430,12 @@ def patch_neck_injection(
         gate_init=config.gate_init,
         attention_heads=config.attention_heads,
         attention_dropout=config.attention_dropout,
+    )
+    fusion.set_token_ablation(config.token_ablation, config.token_ablation_seed)
+    fusion.set_feature_diagnostics(
+        config.feature_diagnostics,
+        config.feature_diagnostics_max_queries,
+        config.feature_diagnostics_max_forwards,
     )
     yolo_channels = _infer_module_out_channels(target_module)
     token_dim = _token_dim(token_provider)

@@ -538,6 +538,34 @@ python examples/val_ultralytics_neck.py \
   --device 0
 ```
 
+For archived full-SPiT checkpoints, use the stronger validation-time dependency
+audit. It reloads the exact same `best.pt`/`last.pt` for every condition and
+tests normal tokens, disabled injection, zero tokens, constant tokens,
+cross-image token shuffle, within-image token shuffle, and random tokens matched
+to each image's token mean/variance. `--annotations` enables COCO `AP_S/M/L`
+and writes per-class AP JSON files. Diagnostics are collected only for the first
+few normal-validation forwards, so they do not distort the primary timing.
+
+```bash
+python scripts/validate_spit_dependency_ablation.py \
+  --experiment-root path/to/spit_runs \
+  --data path/to/data.yaml \
+  --annotations path/to/instances_val2017.json \
+  --weights both \
+  --device 0 \
+  --batch 16 \
+  --project runs/spit_dependency_ablation
+```
+
+The historical neck cross-attention consumes SPiT **token embeddings**, not its
+region-label raster after tokenization. Therefore a purported ``grid labels``
+condition would not test anything in that architecture. `random_matched` and
+the two shuffle controls are meaningful controls at the actual fusion interface.
+The generated `summary.csv` includes checkpoint SHA-256, historical job ID,
+training arguments, base metrics, optional COCO scale/per-class metrics and
+feature-use summaries (`token_rms`, `fusion_delta_rms`, `delta_to_yolo_rms`,
+gate and sampled attention entropy).
+
 Smoke test all fusion modes:
 
 ```bash

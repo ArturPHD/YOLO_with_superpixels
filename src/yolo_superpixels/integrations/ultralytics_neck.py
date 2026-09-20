@@ -151,6 +151,20 @@ class NeckInjectionYOLOAdapter:
     def set_injection_enabled(self, enabled: bool) -> None:
         self.config.enabled = enabled
 
+    def set_token_ablation(self, mode: str, seed: int = 0) -> None:
+        self.config.token_ablation = mode
+        self.config.token_ablation_seed = int(seed)
+
+    def set_feature_diagnostics(
+        self,
+        enabled: bool,
+        max_queries: int = 256,
+        max_forwards: int = 0,
+    ) -> None:
+        self.config.feature_diagnostics = bool(enabled)
+        self.config.feature_diagnostics_max_queries = int(max_queries)
+        self.config.feature_diagnostics_max_forwards = int(max_forwards)
+
 
 def _load_detection_trainer_base():
     try:
@@ -310,6 +324,21 @@ class SuperpixelNeckYOLO:
 
     def set_injection_enabled(self, enabled: bool) -> None:
         self.adapter.set_injection_enabled(enabled)
+        if getattr(self.yolo, "model", None) is not None:
+            self.adapter.patch_model(self.yolo.model)
+
+    def set_token_ablation(self, mode: str, seed: int = 0) -> None:
+        self.adapter.set_token_ablation(mode, seed)
+        if getattr(self.yolo, "model", None) is not None:
+            self.adapter.patch_model(self.yolo.model)
+
+    def set_feature_diagnostics(
+        self,
+        enabled: bool,
+        max_queries: int = 256,
+        max_forwards: int = 0,
+    ) -> None:
+        self.adapter.set_feature_diagnostics(enabled, max_queries, max_forwards)
         if getattr(self.yolo, "model", None) is not None:
             self.adapter.patch_model(self.yolo.model)
 
