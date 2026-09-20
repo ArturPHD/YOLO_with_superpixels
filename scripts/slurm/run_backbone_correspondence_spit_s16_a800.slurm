@@ -6,8 +6,11 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=110G
-#SBATCH --time=72:00:00
-#SBATCH --array=0-1%2
+# Full-SPiT COCO training historically takes several days for 600 epochs.
+# The cluster's established maximum request is 14 days.
+#SBATCH --time=14-00:00:00
+# One A800 is available, so make the two placement arms explicitly sequential.
+#SBATCH --array=0-1%1
 #SBATCH --output=/export/home/radzivilov/YoloSuperpixel/YOLO_with_superpixels/runs/slurm/spit_p3corr_%A_%a.out
 #SBATCH --error=/export/home/radzivilov/YoloSuperpixel/YOLO_with_superpixels/runs/slurm/spit_p3corr_%A_%a.err
 #SBATCH --no-requeue
@@ -22,7 +25,7 @@ DATA_LABEL="${DATA_LABEL:?Set DATA_LABEL, for example full_coco or smalldata_act
 SPIT_WEIGHTS="${SPIT_WEIGHTS:-${PROJECT_DIR}/weights/spit/SPiT_model_SPiT_S16_grad.pth}"
 SPIT_MD5="${SPIT_MD5:-e49be7009c639c0ccda4bd68ed34e5af}"
 MODEL="${MODEL:-yolo12n.pt}"
-EPOCHS="${EPOCHS:-70}"
+EPOCHS="${EPOCHS:-600}"
 BATCH="${BATCH:-32}"
 WORKERS="${WORKERS:-8}"
 SEED="${SEED:-0}"
