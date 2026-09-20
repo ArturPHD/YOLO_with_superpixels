@@ -566,6 +566,20 @@ training arguments, base metrics, optional COCO scale/per-class metrics and
 feature-use summaries (`token_rms`, `fusion_delta_rms`, `delta_to_yolo_rms`,
 gate and sampled attention entropy).
 
+To audit a directory of archived Ultralytics runs, including cluster launchers
+that write `RUN_META.txt`, `RUN_COMPLETE.txt`, and `RUN_FAILED.txt`, use:
+
+```bash
+python scripts/audit_training_archives.py \
+  --root path/to/archived_runs \
+  --output reports/training_archive_audit
+```
+
+Only a matching `RUN_COMPLETE.txt` plus `results.csv` is reported as
+`complete`. A legacy directory with `results.csv` alone is intentionally marked
+`unverified_results_only`, since an interrupted Ultralytics run can also have a
+CSV and `best.pt`.
+
 Smoke test all fusion modes:
 
 ```bash
