@@ -158,7 +158,7 @@ def _find_fusion(model: SuperpixelNeckYOLO) -> SuperpixelNeckFusion:
     return matches[0]
 
 
-def _coco_metrics(predictions: Path, annotations: Path) -> tuple[dict[str, float], dict[str, float]]:
+def _coco_metrics(predictions: Path, annotations: Path) -> tuple[dict[str, float], dict[str, float], str]:
     try:
         import numpy as np
         from pycocotools.coco import COCO
@@ -167,7 +167,29 @@ def _coco_metrics(predictions: Path, annotations: Path) -> tuple[dict[str, float
         raise RuntimeError("AP_S/M/L and per-class AP require pycocotools.") from exc
 
     coco_gt = COCO(str(annotations))
-    coco_dt = coco_gt.loadRes(str(predictions))
+    prediction_rows = json.loads(predictions.read_text(encoding="utf-8"))
+    category_ids = {int(row["category_id"]) for row in prediction_rows}
+    coco_category_ids = set(coco_gt.getCatIds())
+    mapping_name = "native_category_ids"
+    evaluation_predictions = predictions
+    if category_ids and not category_ids.issubset(coco_category_ids):
+        # Ultralytics writes class_id + 1 when the data YAML is not literally
+        # named coco.yaml. Convert its contiguous 1..80 IDs to COCO category IDs
+        # before direct COCOeval, while retaining the original predictions file.
+        from ultralytics.data.converter import coco80_to_coco91_class
+
+        mapping = coco80_to_coco91_class()
+        remapped_rows = []
+        for row in prediction_rows:
+            class_index = int(row["category_id"]) - 1
+            if class_index < 0 or class_index >= len(mapping):
+                raise ValueError(f"Unexpected non-COCO prediction category ID: {row['category_id']}")
+            remapped_rows.append({**row, "category_id": mapping[class_index]})
+        evaluation_predictions = predictions.with_name(f"{predictions.stem}_coco91.json")
+        evaluation_predictions.write_text(json.dumps(remapped_rows), encoding="utf-8")
+        mapping_name = "ultralytics_coco80_to_coco91"
+
+    coco_dt = coco_gt.loadRes(str(evaluation_predictions))
     evaluation = COCOeval(coco_gt, coco_dt, "bbox")
     evaluation.evaluate()
     evaluation.accumulate()
@@ -186,7 +208,7 @@ def _coco_metrics(predictions: Path, annotations: Path) -> tuple[dict[str, float
         values = precision[:, :, index, 0, -1]
         values = values[values > -1]
         per_class[str(category["name"])] = float(np.mean(values)) if values.size else float("nan")
-    return labels, per_class
+    return labels, per_class, mapping_name
 
 
 def run_case(spec: CheckpointSpec, case: str, args: argparse.Namespace) -> dict[str, Any]:
@@ -239,8 +261,9 @@ def run_case(spec: CheckpointSpec, case: str, args: argparse.Namespace) -> dict[
         row.update(_find_fusion(model).diagnostic_summary())
     if args.annotations:
         predictions = args.project / run_name / "predictions.json"
-        coco_metrics, per_class = _coco_metrics(predictions, args.annotations)
+        coco_metrics, per_class, mapping_name = _coco_metrics(predictions, args.annotations)
         row.update(coco_metrics)
+        row["coco_category_mapping"] = mapping_name
         (args.project / run_name / "per_class_ap.json").write_text(
             json.dumps(per_class, indent=2, sort_keys=True), encoding="utf-8"
         )
