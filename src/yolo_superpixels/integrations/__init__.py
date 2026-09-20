@@ -6,12 +6,20 @@ from .ultralytics_structural import (
     StructuralSupervisionYOLOAdapter,
     SuperpixelStructuralYOLO,
 )
+from .ultralytics_backbone import (
+    BackboneCorrespondenceDetectionTrainer,
+    BackboneCorrespondenceYOLOAdapter,
+    SuperpixelBackboneYOLO,
+)
 
 __all__ = [
     "StructuralSupervisionDetectionTrainer",
     "StructuralSupervisionYOLOAdapter",
+    "BackboneCorrespondenceDetectionTrainer",
+    "BackboneCorrespondenceYOLOAdapter",
     "SuperpixelDetectionTrainer",
     "SuperpixelStructuralYOLO",
+    "SuperpixelBackboneYOLO",
     "SuperpixelYOLO",
     "SuperpixelYOLOAdapter",
 ]

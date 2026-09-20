@@ -1,7 +1,7 @@
 # YOLO with Superpixels
 
 This repository is organized as a small experiment framework for trying different
-ways of injecting superpixel information into YOLO. Three strategies are currently
+ways of injecting superpixel information into YOLO. Several strategies are currently
 implemented:
 
 - `input_channels`: YOLO receives the usual RGB signal plus extra superpixel
@@ -9,6 +9,10 @@ implemented:
   distance-to-boundary maps are also supported.
 - `neck_injection`: YOLO keeps RGB input, but superpixel/token features are
   injected into the neck feature map that feeds the P3 detection branch.
+- `backbone_correspondence`: YOLO keeps RGB input and uses sparse area overlap
+  between P3 CNN cells and superpixel tokens. `native_backbone` changes P3
+  before it contributes to P4, P5, and the P3 neck skip; `isolated_p3` changes
+  only the P3 tensor consumed by its neck skip connection.
 - `auxiliary_loss`: YOLO keeps RGB input for inference, but during training a
   tiny auxiliary head asks an intermediate YOLO feature map to reproduce
   superpixel right/down structure.
@@ -42,6 +46,9 @@ src/yolo_superpixels/
       tokens.py            # SPiTTokenProvider and lightweight region tokens
       fusion.py            # add, concat, cross_attention fusion blocks
       patch.py             # auto-detect Detect.f[0] and wrap the neck layer
+    backbone_correspondence/ # local P3-cell <-> superpixel token fusion
+      fusion.py            # sparse overlap pooling and masked local attention
+      patch.py             # native-backbone and isolated-P3 graph routing
     auxiliary_loss/        # training-only superpixel structure loss
       patch.py             # training-only auxiliary head/loss and strip helper
     structural_supervision/ # train-only box foreground and region-consistency loss
@@ -50,6 +57,7 @@ src/yolo_superpixels/
   integrations/
     ultralytics.py         # Ultralytics YOLO trainer/wrapper
     ultralytics_neck.py    # Ultralytics wrapper for neck injection
+    ultralytics_backbone.py # Ultralytics wrapper for backbone correspondence
     ultralytics_auxiliary.py # Ultralytics wrapper for auxiliary-loss training
     ultralytics_structural.py # Ultralytics wrapper for SP-11 training
 
@@ -540,6 +548,82 @@ python examples/smoke_train_neck_injection.py \
   --fusion add concat cross_attention \
   --token-provider region \
   --region-algorithm torch_slic
+```
+
+## Backbone Correspondence
+
+`backbone_correspondence` is distinct from the older global P3 neck attention.
+It uses a superpixel label map after augmentation to build sparse raster overlap
+edges between every P3 CNN cell and only the superpixel tokens that occupy part
+of that cell. `overlap_attention` makes the CNN cell a query over those local
+tokens; `overlap_pool` is the non-attention correspondence control.
+
+Two routes are available:
+
+| Placement | Graph effect |
+| --- | --- |
+| `native_backbone` | Patches the original backbone P3 tensor. Its enriched output subsequently contributes to P4, P5, and the P3 neck skip. |
+| `isolated_p3` | Leaves the original P3 tensor to build P4/P5, and replaces only the P3 input at its neck consumer. |
+
+For YOLO12n/YOLO26n at 640 px, the resolved source is backbone layer `4`
+(`B x 128 x 80 x 80`). The resolved P3 consumers are layers `13` and `15`,
+respectively. The resolver validates the P3 stride through a real forward rather
+than assuming fixed layer indices for all future Ultralytics architectures.
+
+The first intended experiment uses a frozen official SPiT-S16 checkpoint and a
+trainable correspondence fusion module. The command below is a short technical
+smoke; use a matched RGB-only fine-tune before interpreting accuracy.
+
+```bash
+python examples/train_ultralytics_backbone.py \
+  --model yolo12n.pt \
+  --data data.yaml \
+  --epochs 2 \
+  --imgsz 640 \
+  --batch 1 \
+  --workers 0 \
+  --device 0 \
+  --placement native_backbone \
+  --fusion overlap_attention \
+  --token-provider spit \
+  --spit-weights path/to/SPiT_model_SPiT_S16_grad.pth \
+  --spit-train-mode frozen \
+  --spit-emb-dim 384 \
+  --spit-num-bins 16 \
+  --spit-heads 6 \
+  --spit-depth 12 \
+  --spit-keep-k 0 \
+  --spit-image-size 160 \
+  --no-bbox-reg
+```
+
+Replace `--placement native_backbone` with `--placement isolated_p3` for the
+route-specific control. `keep_k=0` is intentional: SPiT budget dropout was not
+stable in historical batched CUDA runs. Full SPiT is computed on the input CUDA
+device; the correspondence module uses GPU tensor grouping/scatter operations
+and never constructs CPU polygons.
+
+Visualize one real image and the routing diagrams:
+
+```bash
+python scripts/visualize_backbone_correspondence.py \
+  --image path/to/image.jpg \
+  --output visualizations/backbone_correspondence.png \
+  --device cuda:0
+```
+
+The visualizer is an explanatory tool, so it may copy labels to CPU after GPU
+computation to render a PNG. That copy is not part of model training or inference.
+
+The opt-in lifecycle smoke covers one epoch of training followed by fresh-process
+checkpoint load, validation, and prediction for both routes:
+
+```bash
+python scripts/run_e2e_smoke.py \
+  --strategy backbone_native backbone_isolated \
+  --model yolo12n.pt \
+  --device 0 \
+  --require-cuda
 ```
 
 ## Auxiliary loss quick start

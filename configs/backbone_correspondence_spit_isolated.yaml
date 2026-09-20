@@ -1,0 +1,21 @@
+description: Full SPiT S16 tokens fused only into the P3 skip consumed by the neck.
+strategy: backbone_correspondence
+placement: isolated_p3
+fusion: overlap_attention
+gate_init: tiny
+attention_heads: 4
+overlap_logit_bias: 1.0
+token_provider: spit
+spit_train_mode: frozen
+spit:
+  preset: SPiT-S16-grad
+  emb_dim: 384
+  num_bins: 16
+  heads: 6
+  depth: 12
+  keep_k: 0
+  image_size: 160
+  tokenizer: superpixel
+  bbox_reg: false
+  drop_delta: false
+  weights: set-at-launch

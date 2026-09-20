@@ -31,7 +31,7 @@ if str(SRC) not in sys.path:
     # Child processes execute this file from scripts/, while the package lives in src/.
     sys.path.insert(0, str(SRC))
 
-STRATEGIES = ("input", "neck", "auxiliary", "structural")
+STRATEGIES = ("input", "neck", "backbone_native", "backbone_isolated", "auxiliary", "structural")
 INPUT_CHANNEL_MODES = ("adjacency", "soft_interior", "soft_boundary", "soft_boundary_interior")
 
 
@@ -128,6 +128,23 @@ def neck_config():
     )
 
 
+def backbone_config(placement: str):
+    from yolo_superpixels import BackboneCorrespondenceConfig
+
+    return BackboneCorrespondenceConfig(
+        placement=placement,
+        fusion="overlap_attention",
+        token_provider="region",
+        region_algorithm="torch_slic",
+        region_n_segments=16,
+        region_num_iters=2,
+        emb_dim=16,
+        attention_heads=2,
+        image_size=64,
+        validation_imgsz=64,
+    )
+
+
 def auxiliary_config():
     from yolo_superpixels import AuxiliaryLossConfig
 
@@ -181,6 +198,11 @@ def build_model(
         from yolo_superpixels import SuperpixelNeckYOLO
 
         return SuperpixelNeckYOLO(model_path, config=neck_config())
+    if strategy in {"backbone_native", "backbone_isolated"}:
+        from yolo_superpixels import SuperpixelBackboneYOLO
+
+        placement = "native_backbone" if strategy == "backbone_native" else "isolated_p3"
+        return SuperpixelBackboneYOLO(model_path, config=backbone_config(placement))
     if strategy == "auxiliary":
         from yolo_superpixels import SuperpixelAuxiliaryYOLO
 
@@ -253,7 +275,7 @@ def worker_val(args: argparse.Namespace) -> None:
     }
     if args.strategy[0] == "input":
         model.val(extra_channels_enabled=True, **val_kwargs)
-    elif args.strategy[0] == "neck":
+    elif args.strategy[0] in {"neck", "backbone_native", "backbone_isolated"}:
         model.val(injection_enabled=True, **val_kwargs)
     else:
         model.val(**val_kwargs)
@@ -283,7 +305,7 @@ def worker_predict(args: argparse.Namespace) -> None:
     }
     if args.strategy[0] == "input":
         model.predict(extra_channels_enabled=True, **predict_kwargs)
-    elif args.strategy[0] == "neck":
+    elif args.strategy[0] in {"neck", "backbone_native", "backbone_isolated"}:
         model.predict(injection_enabled=True, **predict_kwargs)
     else:
         model.predict(**predict_kwargs)
