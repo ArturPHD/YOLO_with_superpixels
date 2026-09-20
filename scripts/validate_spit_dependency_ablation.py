@@ -66,6 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--spit-weights", help="Optional local override if a checkpoint lacks its embedded provider.")
     parser.add_argument("--annotations", type=Path, help="COCO instances JSON; enables AP_S/M/L and per-class AP.")
     parser.add_argument("--save-json", action="store_true", help="Save COCO predictions even without --annotations.")
+    parser.add_argument("--keep-predictions", action="store_true", help="Retain prediction JSON after COCOeval.")
     parser.add_argument("--diagnostic-cases", nargs="+", choices=sorted(TOKEN_CASES), default=["normal"])
     parser.add_argument("--diagnostic-forwards", type=int, default=8)
     parser.add_argument("--diagnostic-queries", type=int, default=256)
@@ -267,6 +268,9 @@ def run_case(spec: CheckpointSpec, case: str, args: argparse.Namespace) -> dict[
         (args.project / run_name / "per_class_ap.json").write_text(
             json.dumps(per_class, indent=2, sort_keys=True), encoding="utf-8"
         )
+        if not args.keep_predictions:
+            predictions.unlink(missing_ok=True)
+            predictions.with_name(f"{predictions.stem}_coco91.json").unlink(missing_ok=True)
     row["status"] = "ok"
     return row
 
