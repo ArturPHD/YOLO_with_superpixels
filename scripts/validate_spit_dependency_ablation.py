@@ -1,8 +1,9 @@
-"""Audit whether trained neck-injection checkpoints use SPiT token information.
+"""Audit whether trained neck-injection checkpoints use token information.
 
 Each case reloads the same checkpoint and changes only the validation-time token
-values presented to its already-trained fusion module. This is an OOD dependency
-diagnostic, not evidence that any perturbation is a new useful representation.
+values presented to its already-trained fusion module. It supports full SPiT and
+Q* checkpoints. This is an OOD dependency diagnostic, not evidence that any
+perturbation is a new useful representation.
 """
 
 from __future__ import annotations
@@ -55,6 +56,12 @@ class CheckpointSpec:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--experiment-root", type=Path, nargs="+", required=True)
+    parser.add_argument(
+        "--token-provider",
+        choices=["spit", "qstar"],
+        default="spit",
+        help="Checkpoint provider to discover. The default preserves the historical SPiT workflow.",
+    )
     parser.add_argument("--data", required=True)
     parser.add_argument("--weights", choices=["best", "last", "both"], default="both")
     parser.add_argument("--cases", nargs="+", choices=sorted(TOKEN_CASES), default=list(TOKEN_CASES))
@@ -70,7 +77,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--diagnostic-cases", nargs="+", choices=sorted(TOKEN_CASES), default=["normal"])
     parser.add_argument("--diagnostic-forwards", type=int, default=8)
     parser.add_argument("--diagnostic-queries", type=int, default=256)
-    parser.add_argument("--project", type=Path, default=ROOT / "runs" / "spit_dependency_ablation")
+    parser.add_argument("--project", type=Path, default=ROOT / "runs" / "neck_dependency_ablation")
     parser.add_argument("--name", default="dependency")
     parser.add_argument("--limit", type=int, help="Limit checkpoints for a technical smoke.")
     parser.add_argument("--dry-run", action="store_true")
@@ -84,7 +91,9 @@ def _load_payload(path: Path) -> dict[str, Any]:
     return payload
 
 
-def discover_checkpoints(roots: list[Path], weight_choice: str) -> list[CheckpointSpec]:
+def discover_checkpoints(
+    roots: list[Path], weight_choice: str, token_provider: str
+) -> list[CheckpointSpec]:
     kinds = ("best", "last") if weight_choice == "both" else (weight_choice,)
     specs: list[CheckpointSpec] = []
     seen: set[tuple[Path, str]] = set()
@@ -92,7 +101,7 @@ def discover_checkpoints(roots: list[Path], weight_choice: str) -> list[Checkpoi
         for config_path in sorted(root.rglob("superpixel_config.json")):
             payload = _load_payload(config_path)
             config = payload["config"]
-            if payload.get("strategy") != "neck_injection" or config.get("token_provider") != "spit":
+            if payload.get("strategy") != "neck_injection" or config.get("token_provider") != token_provider:
                 continue
             run_dir = config_path.parent
             for kind in kinds:
@@ -147,7 +156,7 @@ def _build_config(spec: CheckpointSpec, args: argparse.Namespace, enabled: bool,
     config.feature_diagnostics = diagnostics and enabled
     config.feature_diagnostics_max_forwards = args.diagnostic_forwards if diagnostics and enabled else 0
     config.feature_diagnostics_max_queries = args.diagnostic_queries
-    if args.spit_weights:
+    if args.spit_weights and args.token_provider == "spit":
         config.spit_weights = str(args.spit_weights)
     return config
 
@@ -221,6 +230,7 @@ def run_case(spec: CheckpointSpec, case: str, args: argparse.Namespace) -> dict[
         "run_dir": str(spec.run_dir),
         "weight_kind": spec.weight_kind,
         "case": case,
+        "token_provider": args.token_provider,
         "injection_enabled": enabled,
         "token_ablation": ablation,
         "job_id": _job_id(spec.payload),
@@ -235,6 +245,10 @@ def run_case(spec: CheckpointSpec, case: str, args: argparse.Namespace) -> dict[
         return row
 
     config = _build_config(spec, args, enabled, ablation, diagnostics)
+    if case == "batch_shuffle" and config.fusion != "cross_attention":
+        row["status"] = "not_applicable"
+        row["reason"] = "batch_shuffle is defined only for cross_attention fusion"
+        return row
     start = time.perf_counter()
     model = SuperpixelNeckYOLO(str(spec.checkpoint), config=config)
     model.set_injection_enabled(enabled)
@@ -287,11 +301,11 @@ def write_summary(rows: list[dict[str, Any]], output_dir: Path) -> None:
 
 def main() -> None:
     args = parse_args()
-    specs = discover_checkpoints(args.experiment_root, args.weights)
+    specs = discover_checkpoints(args.experiment_root, args.weights, args.token_provider)
     if args.limit is not None:
         specs = specs[: args.limit]
     if not specs:
-        raise SystemExit("No full-SPiT neck-injection checkpoints found.")
+        raise SystemExit(f"No {args.token_provider} neck-injection checkpoints found.")
 
     rows: list[dict[str, Any]] = []
     for spec in specs:

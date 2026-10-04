@@ -594,6 +594,25 @@ python scripts/validate_spit_dependency_ablation.py \
   --project runs/spit_dependency_ablation
 ```
 
+The same script also audits Q* checkpoints; select them explicitly and point it
+at a directory containing their `superpixel_config.json` sidecars:
+
+```bash
+python scripts/validate_spit_dependency_ablation.py \
+  --token-provider qstar \
+  --experiment-root /path/to/qstar_runs \
+  --data data.yaml \
+  --weights best \
+  --device 0 \
+  --diagnostic-cases normal \
+  --project runs/qstar_dependency_ablation
+```
+
+The report compares normal tokens, disabled injection, zero tokens, per-image
+constant tokens, within-image shuffle, matched random tokens, and cross-image
+shuffle when the checkpoint uses cross-attention. These are dependency controls,
+not alternative Q* algorithms or evidence of improved detection quality.
+
 The historical neck cross-attention consumes SPiT **token embeddings**, not its
 region-label raster after tokenization. Therefore a purported ``grid labels``
 condition would not test anything in that architecture. `random_matched` and
