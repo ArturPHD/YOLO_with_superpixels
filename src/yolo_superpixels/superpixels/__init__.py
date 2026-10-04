@@ -20,6 +20,7 @@ from .adjacency import (
 from .algorithms import (
     CallableSuperpixelAlgorithm,
     OpenCVSuperpixelAlgorithm,
+    QStarSuperpixelAlgorithm,
     SLICSuperpixelAlgorithm,
     SPiTDenseAdjacencyAlgorithm,
     SPiTDenseEdgeAlgorithm,
@@ -41,6 +42,7 @@ __all__ = [
     "EdgeRepresentation",
     "CallableSuperpixelAlgorithm",
     "OpenCVSuperpixelAlgorithm",
+    "QStarSuperpixelAlgorithm",
     "SLICSuperpixelAlgorithm",
     "SPiTDenseAdjacencyAlgorithm",
     "SPiTDenseEdgeAlgorithm",

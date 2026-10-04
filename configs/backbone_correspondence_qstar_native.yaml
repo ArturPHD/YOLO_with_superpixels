@@ -1,0 +1,20 @@
+description: Q* hierarchy tokens fused at native P3 so enriched P3 also reaches P4/P5 and the YOLO neck.
+strategy: backbone_correspondence
+placement: native_backbone
+fusion: overlap_attention
+gate_init: tiny
+attention_heads: 4
+overlap_logit_bias: 1.0
+token_provider: qstar
+qstar:
+  image_size: 160
+  target_k: 512
+  max_level: 5
+  level: 0
+  relax_iters: 5
+  compactness: 0.5
+  margin: 0.1
+  min_area: 9
+  min_diam: 1
+  learned: false
+  freeze: false

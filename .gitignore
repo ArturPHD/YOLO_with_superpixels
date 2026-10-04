@@ -34,6 +34,10 @@ visualizations/
 third_party/SPiT/
 third_party/*
 !third_party/README.md
+!third_party/qstar_superpixels/
+!third_party/qstar_superpixels/**
+third_party/qstar_superpixels/**/__pycache__/
+third_party/qstar_superpixels/**/*.py[cod]
 /spit.zip
 /SPiT_Yolo.zip
 *.cache

@@ -17,6 +17,7 @@ from ...superpixels.algorithms import (
     TorchSLICSuperpixelAlgorithm,
     TorchVoronoiSuperpixelAlgorithm,
 )
+from ...superpixels.qstar import QStarConfig, QStarRunner
 
 
 @dataclass
@@ -509,3 +510,141 @@ class SPiTLabelTokenProvider(nn.Module):
         raw_tokens = raw_tokens.to(device=embed_parameter.device, dtype=embed_parameter.dtype)
         tokens = self.embedder(raw_tokens)
         return TokenBundle(tokens=tokens, valid_mask=valid_mask, labels=local_labels)
+
+
+class QStarTokenProvider(nn.Module):
+    """Convert Marius Aasan's Q* hierarchical regions into fusion tokens.
+
+    Q* returns globally indexed variable-length region features across a batch.
+    This provider keeps its selected hierarchy level on the input CUDA device,
+    preserves rectangular image geometry when applying its internal size budget,
+    adds each region's normalized centroid, pads only for YOLO attention, and
+    projects the resulting tokens into the requested fusion dimension.
+    """
+
+    def __init__(
+        self,
+        emb_dim: int = 64,
+        image_size: int | tuple[int, int] | list[int] | None = 160,
+        target_k: int = 512,
+        max_level: int = 5,
+        level: int = 0,
+        relax_iters: int = 5,
+        compactness: float = 0.5,
+        margin: float = 0.1,
+        min_area: int = 9,
+        min_diam: int = 1,
+        learned: bool = False,
+        freeze: bool = False,
+        hidden_dim: int | None = None,
+    ) -> None:
+        super().__init__()
+        self.image_size = _parse_size(image_size)
+        self.qstar = QStarRunner(
+            QStarConfig(
+                target_k=target_k,
+                max_level=max_level,
+                relax_iters=relax_iters,
+                compactness=compactness,
+                margin=margin,
+                min_area=min_area,
+                min_diam=min_diam,
+            ),
+            level=level,
+            learned=learned,
+        )
+        self.qstar.set_frozen(freeze)
+        feature_dim = self.qstar.feature_dim + 2
+        hidden_dim = hidden_dim or max(emb_dim, 32)
+        self.embedder = nn.Sequential(
+            nn.Linear(feature_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, emb_dim),
+        )
+
+    @property
+    def emb_dim(self) -> int:
+        last = self.embedder[-1]
+        assert isinstance(last, nn.Linear)
+        return int(last.out_features)
+
+    @property
+    def qstar_frozen(self) -> bool:
+        return self.qstar.frozen
+
+    def set_qstar_frozen(self, frozen: bool) -> None:
+        self.qstar.set_frozen(frozen)
+
+    def _resize_to_fit(self, image: torch.Tensor) -> torch.Tensor:
+        """Resize into the Q* budget without changing the image aspect ratio.
+
+        Q* itself adds a replicate-padded square working canvas when its
+        quadtree requires one.  Resizing a rectangular YOLO batch directly to
+        a square here would instead warp regions and their centroids, so this
+        method only scales the image until it fits the configured budget.
+        """
+
+        if self.image_size is None:
+            return image
+        height, width = image.shape[-2:]
+        target_height, target_width = self.image_size
+        scale = min(target_height / height, target_width / width)
+        resized_height = max(1, round(height * scale))
+        resized_width = max(1, round(width * scale))
+        if (resized_height, resized_width) == (height, width):
+            return image
+        return F.interpolate(
+            image,
+            size=(resized_height, resized_width),
+            mode="bilinear",
+            align_corners=False,
+        )
+
+    def forward(self, rgb: torch.Tensor) -> TokenBundle:
+        if rgb.ndim != 4 or rgb.shape[1] < 3:
+            raise ValueError(f"Expected Bx3xHxW RGB input, got shape {tuple(rgb.shape)}.")
+        image = rgb[:, :3].detach().float().clamp(0.0, 1.0)
+        image = self._resize_to_fit(image)
+        result = self.qstar(image)
+        local_labels, raw_tokens, valid_mask = self._local_tokens(result.labels, result.features)
+        parameter = next(self.embedder.parameters())
+        tokens = self.embedder(raw_tokens.to(device=parameter.device, dtype=parameter.dtype))
+        return TokenBundle(tokens=tokens, valid_mask=valid_mask, labels=local_labels)
+
+    @staticmethod
+    def _local_tokens(
+        labels: torch.Tensor,
+        features: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Reindex Q* global IDs per image and append per-region centroids."""
+
+        if labels.ndim != 3:
+            raise ValueError(f"Expected BxHxW Q* labels, got {tuple(labels.shape)}.")
+        batch, height, width = labels.shape
+        device, dtype = features.device, features.dtype
+        regions_per_image = [torch.unique(labels[index], sorted=True) for index in range(batch)]
+        max_regions = max((ids.numel() for ids in regions_per_image), default=0)
+        if max_regions <= 0:
+            raise RuntimeError("Q* returned no regions.")
+        raw = torch.zeros((batch, max_regions + 1, features.shape[1] + 2), device=device, dtype=dtype)
+        valid = torch.zeros((batch, max_regions + 1), device=device, dtype=torch.bool)
+        local = torch.empty_like(labels, dtype=torch.long)
+        y = torch.linspace(-1.0, 1.0, height, device=device, dtype=dtype)
+        x = torch.linspace(-1.0, 1.0, width, device=device, dtype=dtype)
+        yy, xx = torch.meshgrid(y, x, indexing="ij")
+
+        for index, ids in enumerate(regions_per_image):
+            # Q* IDs are contiguous globally; a temporary lookup avoids any CPU map.
+            lookup = torch.empty(features.shape[0], dtype=torch.long, device=device)
+            lookup[ids] = torch.arange(1, ids.numel() + 1, device=device)
+            local_labels = lookup[labels[index]]
+            local[index] = local_labels
+            count = torch.bincount(local_labels.reshape(-1), minlength=ids.numel() + 1).to(dtype=dtype)
+            y_sum = torch.zeros_like(count).scatter_add_(0, local_labels.reshape(-1), yy.reshape(-1))
+            x_sum = torch.zeros_like(count).scatter_add_(0, local_labels.reshape(-1), xx.reshape(-1))
+            centroids = torch.stack((y_sum / count.clamp_min(1), x_sum / count.clamp_min(1)), dim=1)
+            region_features = torch.cat((features[ids], centroids[1:]), dim=1)
+            raw[index, 1 : ids.numel() + 1] = region_features
+            raw[index, 0] = region_features.mean(dim=0)
+            valid[index, : ids.numel() + 1] = True
+        return local, raw, valid

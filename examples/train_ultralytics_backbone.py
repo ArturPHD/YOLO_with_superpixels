@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overlap-logit-bias", type=float, default=1.0)
     parser.add_argument("--disable-injection", action="store_true")
 
-    parser.add_argument("--token-provider", choices=["region", "spit_labels", "spit"], default="spit")
+    parser.add_argument("--token-provider", choices=["region", "spit_labels", "qstar", "spit"], default="spit")
     parser.add_argument("--spit-weights", default=None)
     parser.add_argument("--spit-train-mode", choices=["joint", "frozen", "delayed", "scratch"], default="frozen")
     parser.add_argument("--spit-lr-scale", type=float, default=1.0)
@@ -40,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--spit-depth", type=int, default=12)
     parser.add_argument("--spit-keep-k", type=int, default=0)
     parser.add_argument("--spit-image-size", type=int, default=160)
+    parser.add_argument("--qstar-image-size", type=int, default=160)
     parser.add_argument("--spit-tokenizer", choices=["superpixel", "default"], default="superpixel")
     parser.add_argument("--drop-delta", action="store_true")
     parser.add_argument("--no-bbox-reg", action="store_true")
@@ -49,6 +50,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--region-num-iters", type=int, default=7)
     parser.add_argument("--region-jitter", type=float, default=0.35)
     parser.add_argument("--region-seed", type=int, default=0)
+    parser.add_argument("--qstar-target-k", type=int, default=512)
+    parser.add_argument("--qstar-max-level", type=int, default=5)
+    parser.add_argument("--qstar-level", type=int, default=0)
+    parser.add_argument("--qstar-relax-iters", type=int, default=5)
+    parser.add_argument("--qstar-compactness", type=float, default=0.5)
+    parser.add_argument("--qstar-margin", type=float, default=0.1)
+    parser.add_argument("--qstar-min-area", type=int, default=9)
+    parser.add_argument("--qstar-min-diam", type=int, default=1)
+    parser.add_argument("--qstar-learned", action="store_true")
+    parser.add_argument("--freeze-qstar", action="store_true")
 
     parser.add_argument("--optimizer", default=None)
     parser.add_argument("--lr0", type=float, default=None)
@@ -76,7 +87,9 @@ def build_config(args: argparse.Namespace) -> BackboneCorrespondenceConfig:
         heads=args.spit_heads,
         depth=args.spit_depth,
         keep_k=args.spit_keep_k,
-        image_size=None if args.spit_image_size <= 0 else args.spit_image_size,
+        image_size=(None if args.qstar_image_size <= 0 else args.qstar_image_size)
+        if args.token_provider == "qstar"
+        else (None if args.spit_image_size <= 0 else args.spit_image_size),
         tokenizer=args.spit_tokenizer,
         spit_weights=args.spit_weights,
         spit_train_mode=args.spit_train_mode,
@@ -90,6 +103,16 @@ def build_config(args: argparse.Namespace) -> BackboneCorrespondenceConfig:
         region_num_iters=args.region_num_iters,
         region_jitter=args.region_jitter,
         region_seed=args.region_seed,
+        qstar_target_k=args.qstar_target_k,
+        qstar_max_level=args.qstar_max_level,
+        qstar_level=args.qstar_level,
+        qstar_relax_iters=args.qstar_relax_iters,
+        qstar_compactness=args.qstar_compactness,
+        qstar_margin=args.qstar_margin,
+        qstar_min_area=args.qstar_min_area,
+        qstar_min_diam=args.qstar_min_diam,
+        qstar_learned=args.qstar_learned,
+        qstar_freeze=args.freeze_qstar,
         extra_kwargs={"allow_random_spit": True} if args.allow_random_spit else {},
     )
 

@@ -623,6 +623,73 @@ class TorchSLICSuperpixelAlgorithm:
 
 
 @dataclass
+class QStarSuperpixelAlgorithm:
+    """Q* hierarchical superpixel labels produced entirely in PyTorch.
+
+    This is the label/edge adapter for input-channel and auxiliary strategies.
+    It deliberately exposes RGB-mode Q* only: learned Q* owns parameters and
+    should instead be installed as a token provider so those parameters are
+    registered in the YOLO model before optimizer creation.
+    """
+
+    target_k: int = 512
+    max_level: int = 5
+    level: int = 0
+    relax_iters: int = 5
+    compactness: float = 0.5
+    margin: float = 0.1
+    min_area: int = 9
+    min_diam: int = 1
+    _runner: Any = field(default=None, init=False, repr=False, compare=False)
+
+    def _get_runner(self):
+        if self._runner is None:
+            from .qstar import QStarConfig, QStarRunner
+
+            self._runner = QStarRunner(
+                QStarConfig(
+                    target_k=self.target_k,
+                    max_level=self.max_level,
+                    relax_iters=self.relax_iters,
+                    compactness=self.compactness,
+                    margin=self.margin,
+                    min_area=self.min_area,
+                    min_diam=self.min_diam,
+                ),
+                level=self.level,
+                learned=False,
+            )
+        return self._runner
+
+    def labels_for_batch(self, batch_tensor):
+        """Return global Q* labels without moving a tensor through host memory."""
+
+        import torch
+
+        rgb = _normalize_torch_image_batch(batch_tensor)
+        runner = self._get_runner().to(rgb.device)
+        with torch.no_grad():
+            return runner(rgb).labels
+
+    def edges_for_batch(
+        self,
+        batch_tensor,
+        channel_order: Sequence[str] = ("right", "down"),
+    ):
+        labels = self.labels_for_batch(batch_tensor)
+        return TorchSLICSuperpixelAlgorithm._labels_to_edges(labels, batch_tensor.dtype, channel_order)
+
+    def __call__(self, image: np.ndarray) -> np.ndarray:
+        import torch
+
+        rgb = _ensure_hwc_rgb(image).astype(np.float32, copy=False)
+        if rgb.max() > 1.5:
+            rgb = rgb / 255.0
+        tensor = torch.from_numpy(np.ascontiguousarray(rgb)).permute(2, 0, 1).unsqueeze(0)
+        return self.edges_for_batch(tensor)[0].detach().cpu().numpy()
+
+
+@dataclass
 class TorchGridSuperpixelAlgorithm:
     """Strict GPU-native regular grid superpixel baseline."""
 

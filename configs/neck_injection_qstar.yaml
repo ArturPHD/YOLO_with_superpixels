@@ -1,0 +1,23 @@
+# Q* hierarchical region-token injection into the selected YOLO neck feature.
+# Runtime defaults are implemented by NeckInjectionConfig; this file documents
+# a reproducible starting point for train_ultralytics_neck.py.
+description: Q* RGB hierarchy tokens with learned token projection and YOLO neck fusion.
+strategy: neck_injection
+fusion: add
+target_layer: null
+enabled: true
+gate_init: tiny
+attention_heads: 4
+token_provider: qstar
+qstar:
+  image_size: 160
+  target_k: 512
+  max_level: 5
+  level: 0 # 0=fine, 1=mid, 2=coarse
+  relax_iters: 5
+  compactness: 0.5
+  margin: 0.1
+  min_area: 9
+  min_diam: 1
+  learned: false # no learned Q* checkpoint was included in new_spx-main.zip
+  freeze: false

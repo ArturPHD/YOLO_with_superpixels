@@ -100,6 +100,32 @@ def test_real_yolo_neck_forward_after_eager_initialization(weights_name):
     assert output is not None
 
 
+def test_real_yolo12n_qstar_neck_parameters_are_in_optimizer_and_forward():
+    model = _load_real_yolo("yolo12n.pt")
+    config = NeckInjectionConfig(
+        fusion="add",
+        token_provider="qstar",
+        emb_dim=16,
+        image_size=160,
+        qstar_target_k=64,
+        validate_target=True,
+        validation_imgsz=64,
+    )
+    result = patch_neck_injection(model, config=config)
+    wrapper = model.model[result.target_layer]
+    assert isinstance(wrapper, NeckInjectionWrapper)
+
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
+    optimizer_ids = {id(parameter) for group in optimizer.param_groups for parameter in group["params"]}
+    qstar_projection = list(wrapper.fusion.token_provider.embedder.parameters())
+    assert all(id(parameter) in optimizer_ids for parameter in qstar_projection)
+
+    model.eval()
+    with torch.no_grad():
+        output = model(torch.rand(1, 3, 64, 64))
+    assert output is not None
+
+
 @pytest.mark.parametrize(
     ("weights_name", "expected_target_layer"),
     [("yolo12n.pt", 14), ("yolo26n.pt", 16)],

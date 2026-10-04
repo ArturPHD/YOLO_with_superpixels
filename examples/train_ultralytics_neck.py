@@ -33,9 +33,9 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--token-provider",
-        choices=["region", "spit_labels", "spit"],
+        choices=["region", "spit_labels", "qstar", "spit"],
         default="region",
-        help="region uses torch-native region tokens; spit_labels uses SPiT labels; spit uses full SPiT tokens.",
+        help="region uses torch-native region tokens; spit_labels uses SPiT labels; qstar uses Q* hierarchy tokens; spit uses full SPiT tokens.",
     )
     parser.add_argument("--spit-tokenizer", choices=["superpixel", "default"], default="superpixel")
     parser.add_argument("--spit-emb-dim", type=int, default=64)
@@ -48,6 +48,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=160,
         help="Resize RGB before SPiT tokenization. Use 0 to keep the training image size.",
+    )
+    parser.add_argument(
+        "--qstar-image-size",
+        type=int,
+        default=160,
+        help="Resize RGB before Q* tokenization. Use 0 to keep the training image size.",
     )
     parser.add_argument("--spit-weights", default=None)
     parser.add_argument(
@@ -93,6 +99,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--spit-label-lambda-grad", type=float, default=27.8)
     parser.add_argument("--spit-label-lambda-col", type=float, default=10.0)
     parser.add_argument("--spit-label-maxlvl", type=int, default=4)
+    parser.add_argument("--qstar-target-k", type=int, default=512)
+    parser.add_argument("--qstar-max-level", type=int, default=5)
+    parser.add_argument("--qstar-level", type=int, default=0, help="Q* hierarchy level: 0=fine, 1=mid, 2=coarse.")
+    parser.add_argument("--qstar-relax-iters", type=int, default=5)
+    parser.add_argument("--qstar-compactness", type=float, default=0.5)
+    parser.add_argument("--qstar-margin", type=float, default=0.1)
+    parser.add_argument("--qstar-min-area", type=int, default=9)
+    parser.add_argument("--qstar-min-diam", type=int, default=1)
+    parser.add_argument("--qstar-learned", action="store_true", help="Use Q*'s uninitialized learned SPCN feature extractor.")
+    parser.add_argument("--freeze-qstar", action="store_true", help="Freeze Q* learned parameters when --qstar-learned is set.")
 
     parser.add_argument("--lr0", type=float, default=None)
     parser.add_argument("--lrf", type=float, default=None)
@@ -122,7 +138,9 @@ def build_config(args: argparse.Namespace) -> NeckInjectionConfig:
         heads=args.spit_heads,
         depth=args.spit_depth,
         keep_k=args.spit_keep_k,
-        image_size=None if args.spit_image_size <= 0 else args.spit_image_size,
+        image_size=(None if args.qstar_image_size <= 0 else args.qstar_image_size)
+        if args.token_provider == "qstar"
+        else (None if args.spit_image_size <= 0 else args.spit_image_size),
         spit_weights=args.spit_weights,
         freeze_spit=args.freeze_spit,
         spit_train_mode=args.spit_train_mode,
@@ -139,6 +157,16 @@ def build_config(args: argparse.Namespace) -> NeckInjectionConfig:
         spit_label_lambda_grad=args.spit_label_lambda_grad,
         spit_label_lambda_col=args.spit_label_lambda_col,
         spit_label_maxlvl=args.spit_label_maxlvl,
+        qstar_target_k=args.qstar_target_k,
+        qstar_max_level=args.qstar_max_level,
+        qstar_level=args.qstar_level,
+        qstar_relax_iters=args.qstar_relax_iters,
+        qstar_compactness=args.qstar_compactness,
+        qstar_margin=args.qstar_margin,
+        qstar_min_area=args.qstar_min_area,
+        qstar_min_diam=args.qstar_min_diam,
+        qstar_learned=args.qstar_learned,
+        qstar_freeze=args.freeze_qstar,
         extra_kwargs={"allow_random_spit": True} if args.allow_random_spit else {},
     )
 

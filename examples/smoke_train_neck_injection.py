@@ -31,10 +31,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--imgsz", type=int, default=64)
     parser.add_argument("--device", default="0")
-    parser.add_argument("--token-provider", choices=["region", "spit_labels", "spit"], default="region")
+    parser.add_argument("--token-provider", choices=["region", "spit_labels", "qstar", "spit"], default="region")
     parser.add_argument("--region-algorithm", choices=["torch_slic", "torch_grid", "torch_voronoi"], default="torch_slic")
     parser.add_argument("--spit-tokenizer", choices=["default", "superpixel"], default="default")
     parser.add_argument("--spit-image-size", type=int, default=64)
+    parser.add_argument("--qstar-image-size", type=int, default=160)
+    parser.add_argument("--qstar-target-k", type=int, default=128)
     parser.add_argument(
         "--allow-random-spit",
         action="store_true",
@@ -93,7 +95,8 @@ def main() -> None:
             region_n_segments=24,
             region_num_iters=2,
             tokenizer=args.spit_tokenizer,
-            image_size=args.spit_image_size,
+            image_size=args.qstar_image_size if args.token_provider == "qstar" else args.spit_image_size,
+            qstar_target_k=args.qstar_target_k,
             emb_dim=32,
             heads=4,
             depth=1,

@@ -183,6 +183,7 @@ import cv2
 import cupy
 from spit.tokenizer.densesp import DenseSPEdgeEmbedder
 from yolo_superpixels import AuxiliaryLossConfig, NeckInjectionConfig, SuperpixelAuxiliaryYOLO, SuperpixelNeckYOLO, SuperpixelYOLO
+from yolo_superpixels.superpixels.qstar import QStarRunner
 print("python", sys.version.split()[0])
 print("torch", torch.__version__, "cuda_available", torch.cuda.is_available())
 print("torchvision", torchvision.__version__)
@@ -194,6 +195,7 @@ print("spit", DenseSPEdgeEmbedder.__name__)
 print("yolo_superpixels", SuperpixelYOLO.__name__)
 print("yolo_superpixels_neck", SuperpixelNeckYOLO.__name__, NeckInjectionConfig.__name__)
 print("yolo_superpixels_auxiliary", SuperpixelAuxiliaryYOLO.__name__, AuxiliaryLossConfig.__name__)
+print("qstar", QStarRunner.__name__)
 "@
 $checkFile = Join-Path ([System.IO.Path]::GetTempPath()) "yolo_superpixels_import_check.py"
 Set-Content -LiteralPath $checkFile -Value $checkImports -Encoding UTF8

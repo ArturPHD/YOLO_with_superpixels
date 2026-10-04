@@ -11,7 +11,7 @@ import torch.nn as nn
 from ..base import StrategyInfo
 from ..input_channels.patch import SUPERPIXEL_DISABLE_FUSE_ATTR, install_ultralytics_fuse_guard
 from .fusion import SuperpixelNeckFusion
-from .tokens import RegionFeatureTokenProvider, SPiTLabelTokenProvider, SPiTTokenProvider
+from .tokens import QStarTokenProvider, RegionFeatureTokenProvider, SPiTLabelTokenProvider, SPiTTokenProvider
 
 
 @dataclass
@@ -52,6 +52,16 @@ class NeckInjectionConfig:
     spit_label_lambda_grad: float = 27.8
     spit_label_lambda_col: float = 10.0
     spit_label_maxlvl: int = 4
+    qstar_target_k: int = 512
+    qstar_max_level: int = 5
+    qstar_level: int = 0
+    qstar_relax_iters: int = 5
+    qstar_compactness: float = 0.5
+    qstar_margin: float = 0.1
+    qstar_min_area: int = 9
+    qstar_min_diam: int = 1
+    qstar_learned: bool = False
+    qstar_freeze: bool = False
     token_ablation: str = "normal"
     token_ablation_seed: int = 0
     feature_diagnostics: bool = False
@@ -89,8 +99,23 @@ class NeckInjectionConfig:
                 drop_delta=self.drop_delta,
                 bbox_reg=self.bbox_reg,
             )
+        if self.token_provider == "qstar":
+            return QStarTokenProvider(
+                emb_dim=self.emb_dim,
+                image_size=self.image_size,
+                target_k=self.qstar_target_k,
+                max_level=self.qstar_max_level,
+                level=self.qstar_level,
+                relax_iters=self.qstar_relax_iters,
+                compactness=self.qstar_compactness,
+                margin=self.qstar_margin,
+                min_area=self.qstar_min_area,
+                min_diam=self.qstar_min_diam,
+                learned=self.qstar_learned,
+                freeze=self.qstar_freeze,
+            )
         if self.token_provider != "spit":
-            raise ValueError("token_provider must be 'region', 'spit_labels', or 'spit'.")
+            raise ValueError("token_provider must be 'region', 'spit_labels', 'qstar', or 'spit'.")
         valid_train_modes = {"joint", "frozen", "delayed", "scratch"}
         if self.spit_train_mode not in valid_train_modes:
             raise ValueError(

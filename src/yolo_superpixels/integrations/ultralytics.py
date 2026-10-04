@@ -20,6 +20,7 @@ from ..superpixels.adjacency import (
 )
 from ..superpixels.algorithms import (
     OpenCVSuperpixelAlgorithm,
+    QStarSuperpixelAlgorithm,
     SLICSuperpixelAlgorithm,
     SPiTDenseAdjacencyAlgorithm,
     SPiTDenseEdgeAlgorithm,
@@ -37,6 +38,7 @@ ENV_PREFIX = "YOLO_SUPERPIXELS_"
 _ACTIVE_ADAPTER: "SuperpixelYOLOAdapter | None" = None
 SUPPORTED_ALGORITHMS = (
     "slic",
+    "qstar",
     "torch_slic",
     "gpu_slic",
     "spit",
@@ -77,6 +79,8 @@ def _build_algorithm_from_name(name: str, kwargs: dict[str, Any]) -> SuperpixelA
     kwargs = dict(kwargs)
     if name == "slic":
         return SLICSuperpixelAlgorithm(**kwargs)
+    if name == "qstar":
+        return QStarSuperpixelAlgorithm(**kwargs)
     if name in {"torch_slic", "gpu_slic"}:
         return TorchSLICSuperpixelAlgorithm(**kwargs)
     if name == "spit":

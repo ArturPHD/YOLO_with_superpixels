@@ -10,6 +10,7 @@ from .patch import (
     patch_neck_injection,
 )
 from .tokens import (
+    QStarTokenProvider,
     RegionFeatureTokenProvider,
     SPiTLabelTokenProvider,
     SPiTTokenProvider,
@@ -23,6 +24,7 @@ __all__ = [
     "NeckInjectionStrategy",
     "NeckInjectionWrapper",
     "RegionFeatureTokenProvider",
+    "QStarTokenProvider",
     "SPiTLabelTokenProvider",
     "SPiTTokenProvider",
     "SuperpixelNeckFusion",

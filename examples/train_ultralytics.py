@@ -13,6 +13,7 @@ from yolo_superpixels import SuperpixelYOLO
 
 ALGORITHM_CHOICES = [
     "slic",
+    "qstar",
     "torch_slic",
     "gpu_slic",
     "spit",
@@ -104,6 +105,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sigma", type=float, default=1.0, help="SLIC only.")
     parser.add_argument("--torch-slic-compactness", type=float, default=1.0, help="torch_slic/gpu_slic only.")
     parser.add_argument("--torch-slic-iters", type=int, default=7, help="torch_slic/gpu_slic only.")
+    parser.add_argument("--qstar-target-k", type=int, default=512, help="qstar only.")
+    parser.add_argument("--qstar-max-level", type=int, default=5, help="qstar only.")
+    parser.add_argument("--qstar-level", type=int, default=0, help="qstar hierarchy level only.")
+    parser.add_argument("--qstar-relax-iters", type=int, default=5, help="qstar only.")
+    parser.add_argument("--qstar-compactness", type=float, default=0.5, help="qstar only.")
+    parser.add_argument("--qstar-margin", type=float, default=0.1, help="qstar only.")
+    parser.add_argument("--qstar-min-area", type=int, default=9, help="qstar only.")
+    parser.add_argument("--qstar-min-diam", type=int, default=1, help="qstar only.")
     parser.add_argument(
         "--soft-max-distance",
         type=int,
@@ -163,6 +172,17 @@ def selected_algorithms(args: argparse.Namespace) -> list[str]:
 
 
 def algorithm_kwargs_for_name(name: str, args: argparse.Namespace) -> dict:
+    if name == "qstar":
+        return {
+            "target_k": args.qstar_target_k,
+            "max_level": args.qstar_max_level,
+            "level": args.qstar_level,
+            "relax_iters": args.qstar_relax_iters,
+            "compactness": args.qstar_compactness,
+            "margin": args.qstar_margin,
+            "min_area": args.qstar_min_area,
+            "min_diam": args.qstar_min_diam,
+        }
     if name == "slic":
         return {
             "n_segments": args.n_segments,

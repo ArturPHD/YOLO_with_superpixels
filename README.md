@@ -440,12 +440,13 @@ Three fusion modes are implemented:
 | `concat` | Concatenates YOLO feature + superpixel feature, then applies a 1x1 conv initialized close to identity. | Slightly heavier, more flexible. |
 | `cross_attention` | Uses YOLO feature locations as queries and superpixel tokens as keys/values. | Most expressive and most expensive. |
 
-There are three token providers:
+There are four token providers:
 
 | Provider | Meaning | Status |
 | --- | --- | --- |
 | `region` | Lightweight GPU-native region tokens from `torch_slic`, `torch_grid`, or `torch_voronoi` labels using mean RGB/position features. | This is not full SPiT tokenization; it is the practical first neck baseline. |
 | `spit_labels` | Uses Marius/SPiT content-aware superpixel tokenizer for labels, then builds lightweight mean RGB/position region tokens. | Recommended first SPiT-based neck experiment. |
+| `qstar` | Uses Marius Aasan's Q* adaptive-quadtree, relaxed and hierarchically merged regions; it passes Q* region features plus region centroids to a learned projection. | GPU-native PyTorch path; no CuPy or host tensor conversion. The supplied archive has no learned Q* checkpoint, so `qstar_learned=false` is the reproducible default. |
 | `spit` | Full SPiT path: tokenizer, interpolation/histogram extractor, embedder, masked ViT blocks. | Requires `--spit-weights` by default. Random full SPiT is allowed only with an explicit ablation flag. |
 
 Recommended first neck experiment with GPU `torch_slic` region tokens:
@@ -484,6 +485,42 @@ python examples/train_ultralytics_neck.py \
   --project runs/superpixel_neck \
   --name yolo12n_spit_labels_add
 ```
+
+Q* hierarchy-token neck injection, using the fine Q* hierarchy level:
+
+```bash
+python examples/train_ultralytics_neck.py \
+  --model yolo12n.pt \
+  --data data.yaml \
+  --epochs 50 \
+  --imgsz 640 \
+  --batch 8 \
+  --device 0 \
+  --fusion add \
+  --token-provider qstar \
+  --qstar-image-size 160 \
+  --qstar-target-k 512 \
+  --qstar-level 0 \
+  --project runs/superpixel_neck \
+  --name yolo12n_qstar_fine_add
+```
+
+Q* is vendored under [MIT](third_party/qstar_superpixels/LICENSE), including
+the supplied provenance and upstream README. It builds an adaptive quadtree,
+relaxes boundaries, removes invalid connected regions, then performs the two
+hierarchical merge stages from the supplied method. `--qstar-level 0`, `1`, and
+`2` select the fine, intermediate, and coarse hierarchy respectively. Q* uses
+only PyTorch tensors in the runtime path. Its adapter uses replicate-padding
+only for non-square or too-small canvases, runs Q* on the resulting square
+canvas, and crops label maps back before token fusion. Before that, the
+tokenizer fits a rectangular image *proportionally* within its internal size
+budget; it does not stretch it into a square. At the normal `imgsz=640` /
+internal `160` square path, neither resize geometry nor Q* padding changes the
+image. The default internal `160` also satisfies the standard `max_level=5`,
+`min_child=4` requirement.
+For the archived learned-Q* experiment, `--qstar-learned` is exposed, but do not
+use it scientifically until compatible Q* pretrained weights and their fitting
+recipe are supplied.
 
 Full SPiT token path, experimental:
 
