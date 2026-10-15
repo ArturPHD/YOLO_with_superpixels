@@ -1,7 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=spit_s16_xfer
 #SBATCH --partition=unrestricted
-#SBATCH --nodelist=gpu-a800.cluster
 #SBATCH --gres=gpu:a800:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
